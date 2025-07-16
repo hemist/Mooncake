@@ -123,6 +123,10 @@ int TransferEngine::init(const std::string &metadata_conn_string,
     multi_transports_->installTransport("ascend", local_topology_);
 #else
 
+#ifdef USE_CXL
+    multi_transports_->installTransport("cxl", local_topology_);
+#endif
+
     if (auto_discover_) {
         LOG(INFO) << "Auto-discovering topology...";
         if (getenv("MC_CUSTOM_TOPO_JSON")) {
