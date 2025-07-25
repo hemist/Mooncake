@@ -73,13 +73,10 @@ int TransferEngine::init(const std::string &metadata_conn_string,
 
         if (metadata_conn_string == P2PHANDSHAKE) {
             rpc_binding_method = "P2P handshake";
-            if (port == getDefaultHandshakePort()) {
-                desc.rpc_port = findAvailableTcpPort(desc.sockfd);
-                if (desc.rpc_port == 0) {
-                    LOG(ERROR)
-                        << "P2P: No valid port found for local TCP service.";
-                    return -1;
-                }
+            desc.rpc_port = findAvailableTcpPort(desc.sockfd);
+            if (desc.rpc_port == 0) {
+                LOG(ERROR) << "P2P: No valid port found for local TCP service.";
+                return -1;
             }
 #ifdef USE_ASCEND
             // The current version of Ascend Transport does not support IPv6, but it will be added in a future release.
@@ -131,7 +128,11 @@ int TransferEngine::init(const std::string &metadata_conn_string,
     if (ret) return ret;
 
 #ifdef USE_ASCEND
-    multi_transports_->installTransport("ascend", local_topology_);
+    Transport* ascend_transport = multi_transports_->installTransport("ascend", local_topology_);
+    if (!ascend_transport) {
+        LOG(ERROR) << "Failed to install Ascend transport";
+        return -1;
+    }
 #else
 
 #ifdef USE_CXL
@@ -158,17 +159,34 @@ int TransferEngine::init(const std::string &metadata_conn_string,
                   << local_topology_->getHcaList().size() << " HCAs.";
 
 #ifdef USE_MNNVL
-        if (local_topology_->getHcaList().size() > 0 && !getenv("MC_FORCE_MNNVL")) {
-            multi_transports_->installTransport("rdma", local_topology_);
+        if (local_topology_->getHcaList().size() > 0 &&
+            !getenv("MC_FORCE_MNNVL")) {
+            Transport* rdma_transport = multi_transports_->installTransport("rdma", local_topology_);
+            if (!rdma_transport) {
+                LOG(ERROR) << "Failed to install RDMA transport";
+                return -1;
+            }
         } else {
-            multi_transports_->installTransport("nvlink", nullptr);
+            Transport* nvlink_transport = multi_transports_->installTransport("nvlink", nullptr);
+            if (!nvlink_transport) {
+                LOG(ERROR) << "Failed to install NVLink transport";
+                return -1;
+            }
         }
 #else
         if (local_topology_->getHcaList().size() > 0) {
             // only install RDMA transport when there is at least one HCA
-            multi_transports_->installTransport("rdma", local_topology_);
+            Transport* rdma_transport = multi_transports_->installTransport("rdma", local_topology_);
+            if (!rdma_transport) {
+                LOG(ERROR) << "Failed to install RDMA transport";
+                return -1;
+            }
         } else {
-            multi_transports_->installTransport("tcp", nullptr);
+            Transport* tcp_transport = multi_transports_->installTransport("tcp", nullptr);
+            if (!tcp_transport) {
+                LOG(ERROR) << "Failed to install TCP transport";
+                return -1;
+            }
         }
 #endif
         // TODO: install other transports automatically
@@ -234,11 +252,18 @@ int TransferEngine::getNotifies(
     return metadata_->getNotifies(notifies);
 }
 
-int TransferEngine::sendNotify(SegmentID target_id,
-                               TransferMetadata::NotifyDesc notify_msg) {
+int TransferEngine::sendNotifyByID(SegmentID target_id,
+                                   TransferMetadata::NotifyDesc notify_msg) {
     auto desc = metadata_->getSegmentDescByID(target_id);
     Transport::NotifyDesc peer_desc;
     int ret = metadata_->sendNotify(desc->name, notify_msg, peer_desc);
+    return ret;
+}
+
+int TransferEngine::sendNotifyByName(std::string remote_agent,
+                                     TransferMetadata::NotifyDesc notify_msg) {
+    Transport::NotifyDesc peer_desc;
+    int ret = metadata_->sendNotify(remote_agent, notify_msg, peer_desc);
     return ret;
 }
 

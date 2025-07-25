@@ -41,16 +41,15 @@ target_link_libraries(
 
 if (USE_CUDA)
   target_include_directories(transfer_engine PRIVATE /usr/local/cuda/include)
-  target_link_libraries(transfer_engine PUBLIC cuda cudart rt)
+  target_link_libraries(transfer_engine PUBLIC cudart rt)
   if (USE_NVMEOF)
     target_link_libraries(transfer_engine PUBLIC nvmeof_transport cufile)
   endif()
 endif()
 
 if (USE_ASCEND)
-  find_package(MPI REQUIRED)
   file(GLOB ASCEND_TOOLKIT_ROOT "/usr/local/Ascend/ascend-toolkit/latest/*-linux")
   set(ASCEND_LIB_DIR "${ASCEND_TOOLKIT_ROOT}/lib64")
   link_directories(${ASCEND_LIB_DIR})
-  target_link_libraries(transfer_engine PUBLIC ascendcl hccl ascend_transport ${MPI_CXX_LIBRARIES} ${MPI_C_LIBRARIES})
+  target_link_libraries(transfer_engine PUBLIC ascendcl hccl ascend_transport MPI::MPI)
 endif()
