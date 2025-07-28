@@ -162,7 +162,12 @@ int CxlTransport::registerLocalMemory(void *addr, size_t length,
                                       const std::string &location,
                                       bool remote_accessible,
                                       bool update_metadata) {
-    (void)remote_accessible;
+    // used by store: 
+    // for now, skip the local buffer registering case... 
+    if (!remote_accessible) {
+        return 0;
+    }
+    
     BufferDesc cxl_buffer_desc;
     cxl_buffer_desc.name = local_server_name_;
 

@@ -146,7 +146,7 @@ class Client {
      * @param size Size of the buffer in bytes
      * @return ErrorCode indicating success/failure
      */
-    tl::expected<void, ErrorCode> MountSegment(const void* buffer, size_t size);
+    tl::expected<void, ErrorCode> MountSegment(const void* buffer, size_t size, bool is_cxl = false);
 
     /**
      * @brief Unregisters a memory segment from master
@@ -195,6 +195,12 @@ class Client {
      */
     std::vector<tl::expected<bool, ErrorCode>> BatchIsExist(
         const std::vector<std::string>& keys);
+
+    /**
+     * @brief Get global segment base address for cxl protocal
+     * @return Global segment base address
+     */
+    void *GetBaseAddr();
 
    private:
     /**

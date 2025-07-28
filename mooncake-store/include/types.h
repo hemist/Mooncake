@@ -35,6 +35,9 @@ static constexpr double DEFAULT_EVICTION_HIGH_WATERMARK_RATIO = 1.0;
 static constexpr int64_t ETCD_MASTER_VIEW_LEASE_TTL = 5;    // in seconds
 static constexpr int64_t DEFAULT_CLIENT_LIVE_TTL_SEC = 10;  // in seconds
 static const std::string DEFAULT_CLUSTER_ID = "mooncake_cluster";
+static const std::string DEFAULT_CXL_PATH = "/dev/dax0.0";
+static const size_t DEFAULT_CXL_BASE = 0x100000000ULL;
+static const size_t DEFAULT_CXL_SIZE = 4ULL * 1024 * 1024 * 1024;
 
 // Forward declarations
 class BufferAllocatorBase;
@@ -484,8 +487,8 @@ inline std::ostream& operator<<(std::ostream& os,
 }
 
 enum class BufferAllocatorType {
-    CACHELIB = 0,  // CachelibBufferAllocator
-    OFFSET = 1,    // OffsetBufferAllocator
+    CACHELIB = 0,       // CachelibBufferAllocator
+    OFFSET = 1,         // OffsetBufferAllocator
 };
 
 /**

@@ -90,7 +90,8 @@ class MasterServiceSupervisor {
                 0),  // Client connection timeout. 0 = no timeout (infinite)
         bool rpc_enable_tcp_no_delay = true,
         const std::string& cluster_id = DEFAULT_CLUSTER_ID,
-        BufferAllocatorType memory_allocator = BufferAllocatorType::CACHELIB);
+        BufferAllocatorType memory_allocator = BufferAllocatorType::CACHELIB,
+        bool enable_cxl = false);
     int Start();
     ~MasterServiceSupervisor();
 
@@ -105,6 +106,7 @@ class MasterServiceSupervisor {
     double eviction_ratio_;
     double eviction_high_watermark_ratio_;
     int64_t client_live_ttl_sec_;
+    bool enable_cxl;
 
     // RPC server configuration parameters
     const int rpc_port_;

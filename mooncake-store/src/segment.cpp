@@ -9,6 +9,28 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
     const uintptr_t buffer = segment.base;
     const size_t size = segment.size;
 
+    // Check if cxl storage is enable
+    if (segment_manager_->enable_cxl_) {
+        if (segment_manager_->memory_allocator_ == BufferAllocatorType::CACHELIB) {
+            auto allocator = segment_manager_->cxl_global_allocator_;
+            if (segment_manager_->cxl_global_allocator_ == nullptr ||
+                segment_manager_->allocators_.empty()) {
+                LOG(ERROR) << "Cxl global allocator has not been initialized.";
+                return ErrorCode::INTERNAL_ERROR;
+            }
+            segment_manager_->allocators_by_name_[segment.name].push_back(allocator);
+            segment_manager_->client_segments_[client_id].push_back(segment.id);
+            segment_manager_->mounted_segments_[segment.id] = {
+                segment, SegmentStatus::OK, allocator};
+
+            MasterMetricManager::instance().inc_total_capacity(size);
+
+            return ErrorCode::OK;
+        }
+        return ErrorCode::INTERNAL_ERROR;
+    }
+    
+
     // Check if parameters are valid before allocating memory.
     if (buffer == 0 || size == 0) {
         LOG(ERROR) << "buffer=" << buffer << " or size=" << size
@@ -135,14 +157,16 @@ ErrorCode ScopedSegmentAccess::PrepareUnmountSegment(
     // Remove the allocator from the segment manager
     std::shared_ptr<BufferAllocatorBase> allocator = mounted_segment.buf_allocator;
 
-    // 1. Remove from allocators
-    auto alloc_it = std::find(segment_manager_->allocators_.begin(),
-                              segment_manager_->allocators_.end(), allocator);
-    if (alloc_it != segment_manager_->allocators_.end()) {
-        segment_manager_->allocators_.erase(alloc_it);
-    } else {
-        LOG(ERROR) << "segment_name=" << segment.name
-                   << ", error=allocator_not_found_in_allocators";
+    // 1. Remove from allocators except cxl_allocator
+    if (!segment_manager_->enable_cxl_) {
+        auto alloc_it = std::find(segment_manager_->allocators_.begin(),
+                                segment_manager_->allocators_.end(), allocator);
+        if (alloc_it != segment_manager_->allocators_.end()) {
+            segment_manager_->allocators_.erase(alloc_it);
+        } else {
+            LOG(ERROR) << "segment_name=" << segment.name
+                    << ", error=allocator_not_found_in_allocators";
+        }
     }
 
     // 2. Remove from allocators_by_name
@@ -248,5 +272,15 @@ ErrorCode ScopedSegmentAccess::QuerySegments(const std::string& segment,
         return ErrorCode::SEGMENT_NOT_FOUND;
         }
     return ErrorCode::OK;
+}
+
+void SegmentManager::initializeCxlAllocator() {
+    VLOG(1) << "Init CXL global allocator.";
+    cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
+                                                DEFAULT_CXL_PATH, 
+                                                DEFAULT_CXL_BASE, 
+                                                DEFAULT_CXL_SIZE);
+
+    allocators_.push_back(cxl_global_allocator_);
 }
 }  // namespace mooncake

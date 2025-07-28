@@ -197,6 +197,15 @@ ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
                        << e.what() << "\"";
             return ErrorCode::INTERNAL_ERROR;
         }
+    }  else if (protocol == "cxl") {
+        LOG(INFO) << "transport_type=cxl";
+        try {
+            transport = transfer_engine_.installTransport("cxl", protocol_args);
+        } catch (std::exception& e) {
+            LOG(ERROR) << "cxl_transport_install_failed error_message=\""
+                       << e.what() << "\"";
+            return ErrorCode::INTERNAL_ERROR;
+        }
     } else {
         LOG(ERROR) << "unsupported_protocol protocol=" << protocol;
         return ErrorCode::INVALID_PARAMS;
@@ -918,10 +927,11 @@ tl::expected<long, ErrorCode> Client::RemoveAll() {
 }
 
 tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
-                                                   size_t size) {
-    if (buffer == nullptr || size == 0 ||
+                                                   size_t size,
+                                                   bool is_cxl) {
+    if (!is_cxl && (buffer == nullptr || size == 0 ||
         reinterpret_cast<uintptr_t>(buffer) % facebook::cachelib::Slab::kSize ||
-        size % facebook::cachelib::Slab::kSize) {
+        size % facebook::cachelib::Slab::kSize)) {
         LOG(ERROR) << "buffer=" << buffer << " or size=" << size
                    << " is not aligned to " << facebook::cachelib::Slab::kSize;
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
@@ -960,6 +970,9 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         ErrorCode err = mount_result.error();
         LOG(ERROR) << "mount_segment_to_master_failed base=" << buffer
                    << " size=" << size << ", error=" << err;
+        transfer_engine_.unregisterLocalMemory((void*)buffer);
+        LOG(INFO) << "unregister_local_memory base=" << buffer;
+        
         return tl::unexpected(err);
     }
 
@@ -1064,6 +1077,10 @@ std::vector<tl::expected<bool, ErrorCode>> Client::BatchIsExist(
     // Return the response directly as it's already in the correct
     // format
     return response;
+}
+
+void* Client::GetBaseAddr() {
+    return transfer_engine_.getBaseAddr();
 }
 
 void Client::PrepareStorageBackend(const std::string& storage_root_dir,

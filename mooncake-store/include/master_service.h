@@ -72,7 +72,8 @@ class MasterService {
                   bool enable_ha = false,
                   const std::string& cluster_id = DEFAULT_CLUSTER_ID,
                   BufferAllocatorType memory_allocator =
-                      BufferAllocatorType::CACHELIB);
+                      BufferAllocatorType::CACHELIB,
+                  bool enable_cxl = false);
     ~MasterService();
 
     /**
@@ -461,6 +462,9 @@ class MasterService {
     // Segment management
     SegmentManager segment_manager_;
     std::shared_ptr<AllocationStrategy> allocation_strategy_;
+
+    // cxl storage controller
+    const bool enable_cxl_; 
 };
 
 }  // namespace mooncake

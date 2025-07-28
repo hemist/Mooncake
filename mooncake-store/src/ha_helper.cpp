@@ -100,7 +100,8 @@ MasterServiceSupervisor::MasterServiceSupervisor(
     std::chrono::steady_clock::duration rpc_conn_timeout,
     bool rpc_enable_tcp_no_delay,
     const std::string& cluster_id,
-    BufferAllocatorType memory_allocator)
+    BufferAllocatorType memory_allocator,
+    bool enable_cxl)
     : enable_gc_(enable_gc),
       enable_metric_reporting_(enable_metric_reporting),
       metrics_port_(metrics_port),
@@ -119,7 +120,8 @@ MasterServiceSupervisor::MasterServiceSupervisor(
       etcd_endpoints_(etcd_endpoints),
       local_hostname_(local_hostname),
       cluster_id_(cluster_id),
-      memory_allocator_(memory_allocator) {}
+      memory_allocator_(memory_allocator),
+      enable_cxl(enable_cxl) {}
 
 int MasterServiceSupervisor::Start() {
     while (true) {

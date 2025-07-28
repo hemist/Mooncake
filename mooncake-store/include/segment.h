@@ -148,8 +148,10 @@ class SegmentManager {
      * @brief Constructor for SegmentManager
      * @param memory_allocator Type of buffer allocator to use for new segments
      */
-    explicit SegmentManager(BufferAllocatorType memory_allocator = BufferAllocatorType::CACHELIB)
-        : memory_allocator_(memory_allocator) {}
+    explicit SegmentManager(BufferAllocatorType memory_allocator = BufferAllocatorType::CACHELIB,
+                            bool enable_cxl = false)
+        : memory_allocator_(memory_allocator),
+          enable_cxl_(enable_cxl) {}
 
     /**
      * @brief Get RAII-style access to segment management operations
@@ -168,10 +170,16 @@ class SegmentManager {
                                      segment_mutex_);
     }
 
+    void initializeCxlAllocator();
+
    private:
     mutable std::shared_mutex segment_mutex_;
     std::shared_ptr<AllocationStrategy> allocation_strategy_;
     const BufferAllocatorType memory_allocator_;  // Type of buffer allocator to use
+    // This singleton allocator is managed by the master
+    // Used for unified allocation and recycling of CXL shared memory.
+    const bool enable_cxl_;
+    std::shared_ptr<BufferAllocatorBase> cxl_global_allocator_;
     // Each allocator is put into both of allocators_by_name_ and allocators_.
     // These two containers only contain allocators whose segment status is OK.
     std::unordered_map<std::string,

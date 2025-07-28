@@ -20,7 +20,8 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
                              ViewVersionId view_version,
                              int64_t client_live_ttl_sec, bool enable_ha,
                              const std::string& cluster_id,
-                             BufferAllocatorType memory_allocator)
+                             BufferAllocatorType memory_allocator,
+                             bool enable_cxl)
     : enable_gc_(enable_gc),
       default_kv_lease_ttl_(default_kv_lease_ttl),
       default_kv_soft_pin_ttl_(default_kv_soft_pin_ttl),
@@ -30,8 +31,9 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
       client_live_ttl_sec_(client_live_ttl_sec),
       enable_ha_(enable_ha),
       cluster_id_(cluster_id),
-      segment_manager_(memory_allocator),
-      allocation_strategy_(std::make_shared<RandomAllocationStrategy>()) {
+      segment_manager_(memory_allocator, enable_cxl),
+      allocation_strategy_(std::make_shared<RandomAllocationStrategy>()),
+      enable_cxl_(enable_cxl) {
     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
         LOG(ERROR) << "Eviction ratio must be between 0.0 and 1.0, "
                    << "current value: " << eviction_ratio_;
@@ -53,6 +55,11 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
         client_monitor_thread_ =
             std::thread(&MasterService::ClientMonitorFunc, this);
         VLOG(1) << "action=start_client_monitor_thread";
+    }
+
+    if (enable_cxl) {
+        segment_manager_.initializeCxlAllocator();
+        VLOG(1) << "action=start_cxl_global_allocator";
     }
 }
 

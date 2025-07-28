@@ -55,7 +55,9 @@ class BufferAllocatorTest : public ::testing::Test {
     }
 
     std::vector<BufferAllocatorType> allocator_types_ = {
-        BufferAllocatorType::CACHELIB, BufferAllocatorType::OFFSET};
+        BufferAllocatorType::CACHELIB, 
+        BufferAllocatorType::OFFSET
+    };
 };
 
 // Test basic allocation and deallocation functionality

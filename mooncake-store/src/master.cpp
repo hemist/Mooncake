@@ -67,8 +67,10 @@ DEFINE_int64(client_ttl, mooncake::DEFAULT_CLIENT_LIVE_TTL_SEC,
 DEFINE_string(cluster_id, mooncake::DEFAULT_CLUSTER_ID,
               "Cluster ID for the master service, used for kvcache persistence in HA mode");
 
-DEFINE_string(memory_allocator, "offset",
+DEFINE_string(memory_allocator, "cachelib",
               "Memory allocator for global segments, cachelib | offset");
+
+DEFINE_bool(enable_cxl, true, "Enable cxl storage.");
 
 int main(int argc, char* argv[]) {
     easylog::set_min_severity(easylog::Severity::WARN);
@@ -96,7 +98,8 @@ int main(int argc, char* argv[]) {
               << ", rpc_conn_timeout_seconds=" << FLAGS_rpc_conn_timeout_seconds
               << ", rpc_enable_tcp_no_delay=" << FLAGS_rpc_enable_tcp_no_delay
               << ", cluster_id=" << FLAGS_cluster_id
-              << ", memory_allocator=" << FLAGS_memory_allocator;
+              << ", memory_allocator=" << FLAGS_memory_allocator
+              << ", enable_cxl=" << FLAGS_enable_cxl;
 
     int server_thread_num =
         std::min(FLAGS_max_threads,
@@ -174,7 +177,7 @@ int main(int argc, char* argv[]) {
             FLAGS_eviction_high_watermark_ratio, FLAGS_client_ttl,
             FLAGS_etcd_endpoints, local_hostname, FLAGS_rpc_address,
             rpc_conn_timeout, FLAGS_rpc_enable_tcp_no_delay, FLAGS_cluster_id,
-            allocator_type);
+            allocator_type, FLAGS_enable_cxl);
 
         return supervisor.Start();
     } else {
@@ -190,7 +193,7 @@ int main(int argc, char* argv[]) {
             FLAGS_enable_metric_reporting, FLAGS_metrics_port,
             FLAGS_eviction_ratio, FLAGS_eviction_high_watermark_ratio, version,
             FLAGS_client_ttl, FLAGS_enable_ha, FLAGS_cluster_id,
-            allocator_type);
+            allocator_type, FLAGS_enable_cxl);
 
         mooncake::RegisterRpcService(server, wrapped_master_service);
         return server.start();
