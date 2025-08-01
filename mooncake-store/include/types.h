@@ -217,15 +217,37 @@ struct ReplicateConfig {
     size_t replica_num{1};
     bool with_soft_pin{false};
     std::string preferred_segment{};  // Preferred segment for allocation
+    UUID client_id{0, 0};
 
     friend std::ostream& operator<<(std::ostream& os,
                                     const ReplicateConfig& config) noexcept {
         return os << "ReplicateConfig: { replica_num: " << config.replica_num
                   << ", with_soft_pin: " << config.with_soft_pin
                   << ", preferred_segment: " << config.preferred_segment
+                  << ", client_id: " << config.client_id
                   << " }";
     }
 };
+
+enum class StorageLevel {
+    RAM = 0,
+    CXL,
+    SSD,
+};
+
+/**
+ * @brief Stream operator for StorageLevel
+ */
+inline std::ostream& operator<<(std::ostream& os,
+                                const StorageLevel& type) noexcept {
+    static const std::unordered_map<StorageLevel, std::string_view>
+        type_strings{{StorageLevel::RAM, "RAM"},
+                     {StorageLevel::CXL, "CXL"},
+                     {StorageLevel::SSD, "CXL"}};
+
+    os << (type_strings.count(type) ? type_strings.at(type) : "UNKNOWN");
+    return os;
+}
 
 class AllocatedBuffer {
    public:
@@ -271,12 +293,25 @@ class AllocatedBuffer {
     struct Descriptor {
         std::string segment_name_;
         uint64_t size_;
+        StorageLevel level_;
         uintptr_t buffer_address_;
         BufStatus status_;
-        YLT_REFL(Descriptor, segment_name_, size_, buffer_address_, status_);
+        YLT_REFL(Descriptor, segment_name_, size_, level_, buffer_address_, status_);
     };
 
     void mark_complete() { status = BufStatus::COMPLETE; }
+
+    void change_to_cxl(std::string client_segment_name) {
+        u_int64_t offset_raw = reinterpret_cast<uintptr_t>(buffer_ptr_);
+        buffer_ptr_ = reinterpret_cast<void*>(offset_raw - DEFAULT_CXL_BASE);
+        level = StorageLevel::CXL;
+        segment_name_ = client_segment_name;
+    }
+
+    void* get_vaddr_from_cxl() {
+        u_int64_t offset_raw = reinterpret_cast<uintptr_t>(buffer_ptr_);
+        return reinterpret_cast<void*>(offset_raw + DEFAULT_CXL_BASE);
+    }
 
    private:
     std::weak_ptr<BufferAllocatorBase> allocator_;
@@ -284,6 +319,7 @@ class AllocatedBuffer {
     BufStatus status{BufStatus::INIT};
     void* buffer_ptr_{nullptr};
     std::size_t size_{0};
+    StorageLevel level{StorageLevel::RAM};
     // RAII handle for buffer allocated by offset allocator
     std::optional<offset_allocator::OffsetAllocationHandle> offset_handle_{
         std::nullopt};
@@ -291,7 +327,7 @@ class AllocatedBuffer {
 
 // Implementation of get_descriptor
 inline AllocatedBuffer::Descriptor AllocatedBuffer::get_descriptor() const {
-    return {segment_name_, static_cast<uint64_t>(size()),
+    return {segment_name_, static_cast<uint64_t>(size()), level,
             reinterpret_cast<uintptr_t>(buffer_ptr_), status};
 }
 
@@ -453,12 +489,13 @@ struct Segment {
                          // of the server that owns the segment
     uintptr_t base{0};
     size_t size{0};
+    StorageLevel level;
     Segment() = default;
     Segment(const UUID& id, const std::string& name, uintptr_t base,
-            size_t size)
-        : id(id), name(name), base(base), size(size) {}
+            size_t size, StorageLevel level = StorageLevel::RAM)
+        : id(id), name(name), base(base), size(size), level(level) {}
 };
-YLT_REFL(Segment, id, name, base, size);
+YLT_REFL(Segment, id, name, base, size, level);
 
 /**
  * @brief Client status from the master's perspective

@@ -89,8 +89,11 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
 
 void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
     try {
+        void* buffer = handle->get_descriptor().level_ == StorageLevel::CXL ?
+                        handle->get_vaddr_from_cxl() :
+                        handle->buffer_ptr_;
         // Deallocate memory using CacheLib.
-        memory_allocator_->free(handle->buffer_ptr_);
+        memory_allocator_->free(buffer);
         handle->status = BufStatus::UNREGISTERED;
         size_t freed_size =
             handle->size_;  // Store size before handle might become invalid

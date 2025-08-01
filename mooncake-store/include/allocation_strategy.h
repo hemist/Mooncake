@@ -133,4 +133,62 @@ class RandomAllocationStrategy : public AllocationStrategy {
     }
 };
 
+/**
+ * @brief Level allocation strategy for Level-Storage.
+ * 
+ * This strategy follows the principles below:  
+ *  1) If both dram_allocator and cxl_allocator are present, allocate using dram_allocator;  
+ *  2) If only cxl_allocator exists, allocate using cxl_allocator.
+ */
+class LevelAllocationStrategy : public AllocationStrategy {
+   public:
+    LevelAllocationStrategy() {}
+
+    std::unique_ptr<AllocatedBuffer> Allocate(
+        const std::vector<std::shared_ptr<BufferAllocatorBase>>& allocators,
+        const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
+            allocators_by_name,
+        size_t objectSize, const ReplicateConfig& config) override {
+            
+        // both dram_allocator and cxl_allocator are present
+        if (allocators.size() > 1) {
+            if (auto allocated_buffer =
+                    TryPreferredAllocate(allocators_by_name, objectSize, config)) {
+                return allocated_buffer;
+            }
+        }
+
+        // allocators[0] is cxl global allocator 
+        return CxlOffsetAllocate(allocators[0], objectSize, config);
+    }
+
+   private:
+    std::unique_ptr<AllocatedBuffer> CxlOffsetAllocate(
+        const std::shared_ptr<BufferAllocatorBase>& cxl_global_allocator,
+        size_t size, const ReplicateConfig& config) {
+        
+        if (!cxl_global_allocator || size == 0) {
+            return nullptr;
+        }
+
+        LOG(INFO) << "Do cxl allocate, overwriten segment=" << config.preferred_segment;
+
+        auto allocated_buffer = cxl_global_allocator->allocate(size);
+        if (allocated_buffer) {
+            allocated_buffer->change_to_cxl(config.preferred_segment);
+        }
+
+        return allocated_buffer;
+    }
+
+    std::unique_ptr<AllocatedBuffer> TryPreferredAllocate(
+        const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
+            allocators_by_name, 
+        size_t objectSize, const ReplicateConfig& config) {
+
+        // todo
+        return nullptr;
+    }
+};
+
 }  // namespace mooncake

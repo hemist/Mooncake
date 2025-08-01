@@ -110,18 +110,24 @@ class ScopedSegmentAccess {
 };
 
 /**
- * @brief RAII-style access to allocators for thread-safe allocator usage
+ * @brief RAII-style access to mounted_segments and allocators for thread-safe usage
  */
-class ScopedAllocatorAccess {
+class ScopedSegmentAllocatorAccess {
    public:
-    explicit ScopedAllocatorAccess(
+    explicit ScopedSegmentAllocatorAccess(
         std::unordered_map<std::string,
                            std::vector<std::shared_ptr<BufferAllocatorBase>>>&
-            allocators_by_name,
-        std::vector<std::shared_ptr<BufferAllocatorBase>>& allocators,
-        std::shared_mutex& mutex)
+                            allocators_by_name,
+                           std::vector<std::shared_ptr<BufferAllocatorBase>>& allocators,
+                           std::unordered_map<UUID, MountedSegment, boost::hash<UUID>>&
+                            mounted_segments,
+                           std::unordered_map<UUID, std::vector<UUID>, boost::hash<UUID>>&
+                            client_segments,
+                           std::shared_mutex& mutex)
         : allocators_by_name_(allocators_by_name),
           allocators_(allocators),
+          mounted_segments_(mounted_segments),
+          client_segments_(client_segments),
           lock_(mutex) {}
 
     const std::unordered_map<std::string,
@@ -134,11 +140,20 @@ class ScopedAllocatorAccess {
         return allocators_;
     }
 
+    /**
+     * @brief Update the replicate_config by client's segments.
+     */
+    ErrorCode updateReplicateConfigBySegment(ReplicateConfig& config);
+
    private:
     const std::unordered_map<std::string,
                        std::vector<std::shared_ptr<BufferAllocatorBase>>>&
         allocators_by_name_;  // segment name -> allocators
     const std::vector<std::shared_ptr<BufferAllocatorBase>>& allocators_;
+    std::unordered_map<UUID, MountedSegment, boost::hash<UUID>>
+        mounted_segments_;  // segment_id -> mounted segment
+    std::unordered_map<UUID, std::vector<UUID>, boost::hash<UUID>>
+        client_segments_;  // client_id -> segment_ids
     std::shared_lock<std::shared_mutex> lock_;
 };
 
@@ -162,12 +177,17 @@ class SegmentManager {
     }
 
     /**
-     * @brief Get RAII-style access to use allocators
+     * @brief Get RAII-style access to use mounted_segments and allocators
      * @return ScopedAllocatorAccess object that holds the lock
      */
-    ScopedAllocatorAccess getAllocatorAccess() {
-        return ScopedAllocatorAccess(allocators_by_name_, allocators_,
-                                     segment_mutex_);
+    ScopedSegmentAllocatorAccess getAllocatorAccess() {
+        return ScopedSegmentAllocatorAccess(
+            allocators_by_name_, 
+            allocators_, 
+            mounted_segments_, 
+            client_segments_, 
+            segment_mutex_
+        );
     }
 
     void initializeCxlAllocator();

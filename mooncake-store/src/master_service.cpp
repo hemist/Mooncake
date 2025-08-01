@@ -32,7 +32,6 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
       enable_ha_(enable_ha),
       cluster_id_(cluster_id),
       segment_manager_(memory_allocator, enable_cxl),
-      allocation_strategy_(std::make_shared<RandomAllocationStrategy>()),
       enable_cxl_(enable_cxl) {
     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
         LOG(ERROR) << "Eviction ratio must be between 0.0 and 1.0, "
@@ -58,8 +57,11 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
     }
 
     if (enable_cxl) {
+        allocation_strategy_ = std::make_shared<LevelAllocationStrategy>();
         segment_manager_.initializeCxlAllocator();
         VLOG(1) << "action=start_cxl_global_allocator";
+    } else {
+        allocation_strategy_ = std::make_shared<RandomAllocationStrategy>();
     }
 }
 
@@ -374,15 +376,22 @@ auto MasterService::PutStart(const std::string& key,
         return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
     }
 
+    // Update replicate_config
+    ReplicateConfig client_config = config;
+    ScopedSegmentAllocatorAccess segment_allocator_access = segment_manager_.getAllocatorAccess();
+    if (segment_allocator_access.updateReplicateConfigBySegment(client_config) != ErrorCode::OK) {
+        LOG(ERROR) << "client_id=" << config.client_id
+                   << ", error=UpdateReplicateConfigBySegment failed";
+        return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
+    }
+
     // Allocate replicas
     std::vector<Replica> replicas;
-    replicas.reserve(config.replica_num);
+    replicas.reserve(client_config.replica_num);
     {
-        ScopedAllocatorAccess allocator_access =
-            segment_manager_.getAllocatorAccess();
-        auto& allocators = allocator_access.getAllocators();
-        auto& allocators_by_name = allocator_access.getAllocatorsByName();
-        for (size_t i = 0; i < config.replica_num; ++i) {
+        auto& allocators = segment_allocator_access.getAllocators();
+        auto& allocators_by_name = segment_allocator_access.getAllocatorsByName();
+        for (size_t i = 0; i < client_config.replica_num; ++i) {
             std::vector<std::unique_ptr<AllocatedBuffer>> handles;
             handles.reserve(slice_lengths.size());
 
@@ -392,7 +401,7 @@ auto MasterService::PutStart(const std::string& key,
 
                 // Use the unified allocation strategy with replica config
                 auto handle = allocation_strategy_->Allocate(
-                    allocators, allocators_by_name, chunk_size, config);
+                    allocators, allocators_by_name, chunk_size, client_config);
 
                 if (!handle) {
                     LOG(ERROR)
@@ -426,7 +435,7 @@ auto MasterService::PutStart(const std::string& key,
     metadata_shards_[shard_idx].metadata.emplace(
         std::piecewise_construct, std::forward_as_tuple(key),
         std::forward_as_tuple(total_length, std::move(replicas),
-                              config.with_soft_pin));
+                              client_config.with_soft_pin));
     return replica_list;
 }
 

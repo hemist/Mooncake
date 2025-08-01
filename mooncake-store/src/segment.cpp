@@ -274,6 +274,34 @@ ErrorCode ScopedSegmentAccess::QuerySegments(const std::string& segment,
     return ErrorCode::OK;
 }
 
+ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(ReplicateConfig& config) {
+    auto it = client_segments_.find(config.client_id);
+    if (it == client_segments_.end()) {
+        return ErrorCode::SEGMENT_NOT_FOUND;
+    }
+
+    // If the client has multiple segments, skip this.
+    const auto& segment_ids = it->second;
+    if (segment_ids.size() != 1) {
+        return ErrorCode::OK;
+    }
+
+    const auto& segment_id = segment_ids.front();
+    auto segment_it = mounted_segments_.find(segment_id);
+    if (segment_it == mounted_segments_.end()) {
+        return ErrorCode::SEGMENT_NOT_FOUND;
+    }
+
+    Segment& segment = segment_it->second.segment;
+    if (segment.level == StorageLevel::CXL) {
+        // Cxl level allows just one replica
+        config.replica_num = 1;
+        // For overwriting allocated_buffer's segment name
+        config.preferred_segment = segment.name;
+    }
+    return ErrorCode::OK;
+}
+
 void SegmentManager::initializeCxlAllocator() {
     VLOG(1) << "Init CXL global allocator.";
     cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(

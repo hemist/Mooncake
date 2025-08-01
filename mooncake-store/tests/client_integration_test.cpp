@@ -12,10 +12,10 @@
 #include "types.h"
 #include "utils.h"
 
-DEFINE_string(protocol, "tcp", "Transfer protocol: rdma|tcp");
+DEFINE_string(protocol, "cxl", "Transfer protocol: rdma|tcp|cxl");
 DEFINE_string(device_name, "ibp6s0",
               "Device name to use, valid if protocol=rdma");
-DEFINE_string(transfer_engine_metadata_url, "http://localhost:8080/metadata",
+DEFINE_string(transfer_engine_metadata_url, "etcd://10.130.5.131:2379",
               "Metadata connection string for transfer engine");
 DEFINE_uint64(default_kv_lease_ttl, mooncake::DEFAULT_DEFAULT_KV_LEASE_TTL,
               "Default lease time for kv objects, must be set to the "
@@ -50,6 +50,7 @@ class ClientIntegrationTest : public ::testing::Test {
         google::InitGoogleLogging("ClientIntegrationTest");
 
         FLAGS_logtostderr = 1;
+        is_cxl = (FLAGS_protocol == "cxl") ? true : false;
 
         // Override flags from environment variables if present
         if (getenv("PROTOCOL")) FLAGS_protocol = getenv("PROTOCOL");
@@ -80,10 +81,12 @@ class ClientIntegrationTest : public ::testing::Test {
 
     static void InitializeSegment() {
         ram_buffer_size_ = 512 * 1024 * 1024;  // 512 MB
-        segment_ptr_ = allocate_buffer_allocator_memory(ram_buffer_size_);
+        segment_ptr_ = is_cxl ? 
+            segment_provider_client_->GetBaseAddr() :
+            allocate_buffer_allocator_memory(ram_buffer_size_);
         LOG_ASSERT(segment_ptr_);
         auto mount_result = segment_provider_client_->MountSegment(
-            segment_ptr_, ram_buffer_size_);
+            segment_ptr_, ram_buffer_size_, is_cxl);
         if (!mount_result.has_value()) {
             LOG(ERROR) << "Failed to mount segment: "
                        << toString(mount_result.error());
@@ -112,11 +115,12 @@ class ClientIntegrationTest : public ::testing::Test {
 
         // Mount segment for test_client_ as well
         test_client_ram_buffer_size_ = 512 * 1024 * 1024;  // 512 MB
-        test_client_segment_ptr_ =
+        test_client_segment_ptr_ = is_cxl ? 
+            test_client_->GetBaseAddr() :
             allocate_buffer_allocator_memory(test_client_ram_buffer_size_);
         LOG_ASSERT(test_client_segment_ptr_);
         auto test_client_mount_result = test_client_->MountSegment(
-            test_client_segment_ptr_, test_client_ram_buffer_size_);
+            test_client_segment_ptr_, test_client_ram_buffer_size_, is_cxl);
         if (!test_client_mount_result.has_value()) {
             LOG(ERROR) << "Failed to mount segment for test_client_: "
                        << toString(test_client_mount_result.error());
@@ -162,6 +166,7 @@ class ClientIntegrationTest : public ::testing::Test {
     static void* test_client_segment_ptr_;
     static size_t test_client_ram_buffer_size_;
     static uint64_t default_kv_lease_ttl_;
+    static inline bool is_cxl = false;
 };
 
 // Static members initialization
@@ -257,6 +262,10 @@ TEST_F(ClientIntegrationTest, RemoveOperation) {
 
 // Test local preferred allocation strategy
 TEST_F(ClientIntegrationTest, LocalPreferredAllocationTest) {
+    if (FLAGS_protocol == "cxl") {
+        GTEST_SKIP() << "Skip LocalPreferredAllocationTest under CXL protocol";
+    }
+
     const std::string test_data = "Test data for local preferred allocation";
     const std::string key = "local_preferred_test_key";
     void* buffer = client_buffer_allocator_->allocate(test_data.size());
@@ -656,6 +665,7 @@ TEST_F(ClientIntegrationTest, BatchPutDuplicateKeys) {
     // Remove might fail if the key wasn't actually put, which is fine
     ASSERT_TRUE(remove_result);
 }
+
 
 }  // namespace testing
 

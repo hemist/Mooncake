@@ -548,7 +548,8 @@ bool TransferSubmitter::isLocalTransfer(
     const std::vector<AllocatedBuffer::Descriptor>& handles) const {
     return std::all_of(handles.begin(), handles.end(),
                        [this](const auto& handle) {
-                           return handle.segment_name_ == local_hostname_;
+                           return (handle.level_ == StorageLevel::RAM) && 
+                                  (handle.segment_name_ == local_hostname_);
                        });
 }
 

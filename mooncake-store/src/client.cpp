@@ -479,8 +479,12 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
         slice_lengths.emplace_back(slices[i].size);
     }
 
+    // Add client info into replica_config for storage level strategy
+    ReplicateConfig client_config = config;
+    client_config.client_id = client_id_;
+
     // Start put operation
-    auto start_result = master_client_.PutStart(key, slice_lengths, config);
+    auto start_result = master_client_.PutStart(key, slice_lengths, client_config);
     if (!start_result) {
         ErrorCode err = start_result.error();
         if (err == ErrorCode::OBJECT_ALREADY_EXISTS) {
@@ -899,8 +903,12 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     const std::vector<ObjectKey>& keys,
     std::vector<std::vector<Slice>>& batched_slices,
     const ReplicateConfig& config) {
+    // Add client info into replica_config for storage level strategy
+    ReplicateConfig client_config = config;
+    client_config.client_id = client_id_;
+
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
-    StartBatchPut(ops, config);
+    StartBatchPut(ops, client_config);
     SubmitTransfers(ops);
     WaitForTransfers(ops);
     FinalizeBatchPut(ops);
@@ -962,8 +970,11 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
 
-    Segment segment(generate_uuid(), local_hostname_,
-                    reinterpret_cast<uintptr_t>(buffer), size);
+    Segment segment = is_cxl
+        ? Segment(generate_uuid(), local_hostname_,
+              reinterpret_cast<uintptr_t>(buffer), size, StorageLevel::CXL)
+        : Segment(generate_uuid(), local_hostname_,
+              reinterpret_cast<uintptr_t>(buffer), size);
 
     auto mount_result = master_client_.MountSegment(segment, client_id_);
     if (!mount_result) {
