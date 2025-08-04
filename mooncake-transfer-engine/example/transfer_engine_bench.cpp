@@ -29,6 +29,7 @@
 #include "common/base/status.h"
 #include "transfer_engine.h"
 #include "transport/transport.h"
+#include "transport/cxl_transport/cxl_transport.h"
 
 #ifdef USE_CUDA
 #include <bits/stdint-uintn.h>
@@ -57,7 +58,11 @@ static void checkCudaError(cudaError_t result, const char *message) {
 const static int NR_SOCKETS =
     numa_available() == 0 ? numa_num_configured_nodes() : 1;
 
+#ifdef USE_CXL
+static int buffer_num = 1;
+#else
 static int buffer_num = NR_SOCKETS;
+#endif
 
 DEFINE_string(local_server_name, mooncake::getHostname(),
               "Local server name for segment discovery");
@@ -210,9 +215,15 @@ Status initiatorWorker(TransferEngine *engine, SegmentID segment_id,
             entry.source = (uint8_t *)(addr) +
                            FLAGS_block_size * (i * FLAGS_threads + thread_id);
             entry.target_id = segment_id;
-            entry.target_offset =
-                remote_base +
-                FLAGS_block_size * (i * FLAGS_threads + thread_id);
+            if (FLAGS_protocol == "cxl") {
+                entry.target_offset =
+                    0 +
+                    FLAGS_block_size * (i * FLAGS_threads + thread_id);
+            } else {
+                    entry.target_offset =
+                    remote_base +
+                    FLAGS_block_size * (i * FLAGS_threads + thread_id);
+            }
             requests.emplace_back(entry);
         }
 
@@ -303,6 +314,8 @@ int initiator() {
             xport = engine->installTransport("tcp", nullptr);
         } else if (FLAGS_protocol == "nvlink") {
             xport = engine->installTransport("nvlink", nullptr);
+        } else if (FLAGS_protocol == "cxl") {
+            xport = engine->installTransport("cxl", nullptr);
         } else {
             LOG(ERROR) << "Unsupported protocol";
         }
@@ -350,9 +363,11 @@ int initiator() {
     addr.resize(buffer_num);
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             "cpu:" + std::to_string(i));
-        LOG_ASSERT(!rc);
+        if (FLAGS_protocol != "cxl") {
+            int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
+                                                "cpu:" + std::to_string(i));
+            LOG_ASSERT(!rc);
+        }
     }
 #endif
 
@@ -386,7 +401,9 @@ int initiator() {
                      duration);
 
     for (int i = 0; i < buffer_num; ++i) {
-        engine->unregisterLocalMemory(addr[i]);
+        if (FLAGS_protocol != "cxl") {
+            engine->unregisterLocalMemory(addr[i]);
+        }
         freeMemoryPool(addr[i], FLAGS_buffer_size);
     }
 
@@ -411,17 +428,21 @@ int target() {
     engine->init(FLAGS_metadata_server, FLAGS_local_server_name.c_str(),
                  hostname_port.first.c_str(), hostname_port.second);
 
+    Transport *xport = nullptr;
     if (!FLAGS_auto_discovery) {
         if (FLAGS_protocol == "rdma") {
             auto nic_priority_matrix = loadNicPriorityMatrix();
             void **args = (void **)malloc(2 * sizeof(void *));
             args[0] = (void *)nic_priority_matrix.c_str();
             args[1] = nullptr;
-            engine->installTransport("rdma", args);
+            xport = engine->installTransport("rdma", args);
         } else if (FLAGS_protocol == "tcp") {
-            engine->installTransport("tcp", nullptr);
+            xport = engine->installTransport("tcp", nullptr);
         } else if (FLAGS_protocol == "nvlink") {
-            engine->installTransport("nvlink", nullptr);
+            xport = engine->installTransport("nvlink", nullptr);
+        } else if(FLAGS_protocol == "cxl") {
+            xport = engine->installTransport("cxl", nullptr);
+            LOG(INFO) << "xport cxl: " << xport;
         } else {
             LOG(ERROR) << "Unsupported protocol";
         }
@@ -468,11 +489,19 @@ int target() {
 #else
     LOG(INFO) << "DRAM is used, numa node num: " << NR_SOCKETS;
     addr.resize(buffer_num);
-    for (int i = 0; i < buffer_num; ++i) {
-        addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             "cpu:" + std::to_string(i));
+
+    if(FLAGS_protocol == "cxl") {
+        CxlTransport* derivedPtr = dynamic_cast<CxlTransport*>(xport);
+        int rc = engine->registerLocalMemory(derivedPtr->getCxlBaseAddr(),
+                                                FLAGS_buffer_size);
         LOG_ASSERT(!rc);
+    } else {
+        for (int i = 0; i < buffer_num; ++i) {
+            addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
+            int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
+                                                "cpu:" + std::to_string(i));
+            LOG_ASSERT(!rc);
+        }
     }
 #endif
 
