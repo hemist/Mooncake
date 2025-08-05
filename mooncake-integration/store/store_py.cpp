@@ -256,7 +256,8 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
             LOG(ERROR) << "Failed to initialize segment memory";
             return tl::unexpected(ErrorCode::INVALID_PARAMS);
         }
-        segment_ptrs_.emplace_back(ptr);
+        if (!is_cxl)
+            segment_ptrs_.emplace_back(ptr);
         auto mount_result = client_->MountSegment(ptr, segment_size, is_cxl);
         if (!mount_result.has_value()) {
             LOG(ERROR) << "Failed to mount segment: "

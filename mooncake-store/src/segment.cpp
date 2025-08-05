@@ -10,7 +10,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
     const size_t size = segment.size;
 
     // Check if cxl storage is enable
-    if (segment_manager_->enable_cxl_) {
+    if (segment_manager_->enable_cxl_ && segment.level == StorageLevel::CXL) {
         if (segment_manager_->memory_allocator_ == BufferAllocatorType::CACHELIB) {
             auto allocator = segment_manager_->cxl_global_allocator_;
             if (segment_manager_->cxl_global_allocator_ == nullptr ||
@@ -158,7 +158,7 @@ ErrorCode ScopedSegmentAccess::PrepareUnmountSegment(
     std::shared_ptr<BufferAllocatorBase> allocator = mounted_segment.buf_allocator;
 
     // 1. Remove from allocators except cxl_allocator
-    if (!segment_manager_->enable_cxl_) {
+    if (segment.level != StorageLevel::CXL) {
         auto alloc_it = std::find(segment_manager_->allocators_.begin(),
                                 segment_manager_->allocators_.end(), allocator);
         if (alloc_it != segment_manager_->allocators_.end()) {

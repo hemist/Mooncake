@@ -161,7 +161,7 @@ int MasterServiceSupervisor::Start() {
             allow_evict_soft_pinned_objects_, enable_metric_reporting_,
             metrics_port_, eviction_ratio_, eviction_high_watermark_ratio_,
             version, client_live_ttl_sec_, enable_ha, cluster_id_,
-            memory_allocator_);
+            memory_allocator_, enable_cxl);
         mooncake::RegisterRpcService(server, wrapped_master_service);
         // Metric reporting is now handled by WrappedMasterService.
 
