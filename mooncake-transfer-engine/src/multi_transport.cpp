@@ -258,8 +258,9 @@ Transport *MultiTransport::getTransport(const std::string &proto) {
 
 std::vector<Transport *> MultiTransport::listTransports() {
     std::vector<Transport *> transport_list;
-    for (auto &entry : transport_map_)
+    for (auto &entry : transport_map_) {
         transport_list.push_back(entry.second.get());
+    }
     return transport_list;
 }
 

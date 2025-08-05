@@ -311,7 +311,10 @@ int TransferEngine::registerLocalMemory(void *addr, size_t length,
     for (auto transport : multi_transports_->listTransports()) {
         int ret = transport->registerLocalMemory(
             addr, length, location, remote_accessible, update_metadata);
-        if (ret < 0) return ret;
+        if (ret < 0) {
+            LOG(ERROR) << "Error transport: " << transport->getName();
+            return ret;
+        }
     }
 
     std::unique_lock<std::shared_mutex> lock(mutex_);
