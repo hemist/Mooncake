@@ -32,6 +32,7 @@
 #include <fcntl.h>    // For O_RDWR, O_CREAT, etc.
 #include <unistd.h>   // For open(), close(), read(), write()
 #include <sys/mman.h> // For mmap, munmap
+#include <dml/dml.hpp>
 
 namespace mooncake {
 
@@ -69,6 +70,31 @@ size_t CxlTransport::cxlGetDeviceSize() {
     return 0;
 }
 
+int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
+    auto crc_seed = std::uint32_t(0u);
+    char* c_src = static_cast<char*>(src);
+    char* c_dst = static_cast<char*>(dest);
+    if (size < 1) {
+        return -2;
+    }
+    // Run operation
+    auto result = dml::execute<dml::hardware>(dml::copy_crc, dml::make_view(c_src, size),
+                    dml::make_view(c_dst, size), crc_seed);
+
+    // Check result
+    if (result.status == dml::status_code::ok) {
+        //LOG(INFO) << "DSA copy successed. from " << src << " to " << dest << " len:" << size;
+        return 0;
+    }
+    else {
+        LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
+        //LOG(INFO) << "DSA copy failed. from " << src << " to " << dest << " len:" << size;
+        return -1;
+    }
+
+    return 0;
+}
+
 int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     // Input validation
     if (!src || !dest) {
@@ -82,8 +108,11 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     }
     
     // Perform the memory copy
-    std::memcpy(dest, src, size);
-    
+    if (size < 32768)
+        std::memcpy(dest, src, size);
+    else
+        execute_copy_crc(dest, src, size);
+
     // Memory barriers and cache operations
     if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
         // Ensure memory ordering for CXL operations
@@ -141,6 +170,8 @@ int CxlTransport::cxlDevInit()
         close(fd);
         return ERR_MEMORY;
     }
+    // DSA copy requires that memory has already undergone page faults
+    memset((char*)ptr, 0, cxl_dev_size);
     cxl_base_addr = ptr;
     close(fd);
     return 0;

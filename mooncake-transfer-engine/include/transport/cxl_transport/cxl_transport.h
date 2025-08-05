@@ -79,6 +79,7 @@ class CxlTransport : public Transport {
 
     size_t cxlGetDeviceSize();
 
+    int execute_copy_crc(void *dest, void *src, size_t size);
     int cxlMemcpy(void *dest_addr, void *source_addr, size_t size);
 
     bool isAddressInCxlRange(void *addr);

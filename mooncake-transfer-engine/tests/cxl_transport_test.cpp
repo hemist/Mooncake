@@ -36,7 +36,7 @@ namespace mooncake {
 
 DEFINE_string(local_server_name, getHostname(),
               "Local server name for segment discovery");
-DEFINE_string(metadata_server, "127.0.0.1:2379", "etcd server host address");
+DEFINE_string(metadata_server, "10.130.5.131:2379", "etcd server host address");
 DEFINE_string(mode, "initiator",
               "Running mode: initiator or target. Initiator node read/write "
               "data blocks from target node");
@@ -44,7 +44,7 @@ DEFINE_string(operation, "read", "Operation type: read or write");
 
 DEFINE_string(protocol, "cxl", "Transfer protocol: rdma|tcp|cxl");
 
-DEFINE_string(device_name, "tmp_dax_sim", "Device name for cxl");
+DEFINE_string(device_name, "/dev/dax0.0", "Device name for cxl");
 
 DEFINE_int64(device_size, 1073741824, "Device Size for cxl");
 
@@ -80,9 +80,9 @@ class CXLTransportTest : public ::testing::Test {
         google::InitGoogleLogging("CXLTransportTest");
         FLAGS_logtostderr = 1;
 
-        tmp_fd = open(FLAGS_device_name.c_str(), O_RDWR | O_CREAT, 0666);
-        ASSERT_GE(tmp_fd, 0);
-        ASSERT_EQ(ftruncate(tmp_fd, FLAGS_device_size), 0);
+        //tmp_fd = open(FLAGS_device_name.c_str(), O_RDWR | O_CREAT, 0666);
+        //ASSERT_GE(tmp_fd, 0);
+        //ASSERT_EQ(ftruncate(tmp_fd, FLAGS_device_size), 0);
 
         // Set device name from gflags parameter
         setenv("MC_CXL_DEV_PATH", FLAGS_device_name.c_str(), 1);
@@ -105,6 +105,8 @@ class CXLTransportTest : public ::testing::Test {
 	    cxl_xport = dynamic_cast<CxlTransport*>(xport);
         base_addr = (uint8_t*)cxl_xport->getCxlBaseAddr();
         addr = (uint8_t*) allocateMemoryPool(kDataLength, 0, false);
+        // DSA copy requires that memory has already undergone page faults
+        memset(addr, 0, kDataLength);
         int rc = engine->registerLocalMemory(base_addr + offset_1, len);
         ASSERT_EQ(rc, 0);
 
@@ -167,7 +169,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
         auto batch_id = xport->allocateBatchID(1);
         Status s;
         TransferRequest entry;
-        entry.opcode = TransferRequest::WRITE;
+        entry.opcode = TransferRequest::READ;
         entry.length = kDataLength;
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
@@ -200,6 +202,8 @@ TEST_F(CXLTransportTest, MultipleRead) {
         auto batch_id = xport->allocateBatchID(1);
         int ret = 0;
         void *src = allocateMemoryPool(kDataLength, 0, false);
+        // DSA copy requires that memory has already undergone page faults
+        memset(src, 0, kDataLength);
 
         TransferRequest entry;
         entry.opcode = TransferRequest::READ;
