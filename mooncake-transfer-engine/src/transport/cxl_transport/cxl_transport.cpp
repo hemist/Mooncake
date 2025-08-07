@@ -31,6 +31,8 @@
 #include <cstring>
 #include <fcntl.h>    // For O_RDWR, O_CREAT, etc.
 #include <unistd.h>   // For open(), close(), read(), write()
+#include <sys/mman.h> // For mmap, munmap
+#include <dml/dml.hpp>
 
 namespace mooncake {
 
@@ -38,14 +40,13 @@ CxlTransport::CxlTransport() {
     // cxl_dev_path = "/dev/dax0.0";
     // cxl_dev_size = 1024 * 1024 * 1024;
     // get from env
-    const char* env_cxl_dev_path = std::getenv("CXL_DEV_PATH");
+    const char* env_cxl_dev_path = std::getenv("MC_CXL_DEV_PATH");
+
+    LOG(INFO) << "MC_CXL_DEV_PATH: " << env_cxl_dev_path;
+
     if (env_cxl_dev_path) {
-        cxl_dev_path = new char[std::strlen(env_cxl_dev_path) + 1];
-        std::strcpy(cxl_dev_path, env_cxl_dev_path);
-        cxl_dev_size = cxlGetDeviceSize(cxl_dev_path);
-    } else {
-        cxl_dev_path = "/dev/dax0.0";
-        cxl_dev_size = cxlGetDeviceSize(cxl_dev_path);
+        cxl_dev_path = (char *) env_cxl_dev_path;
+        cxl_dev_size = cxlGetDeviceSize();
     }
 }
 
@@ -54,57 +55,113 @@ CxlTransport::~CxlTransport() {
     metadata_->removeSegmentDesc(local_server_name_);
 }
 
-size_t CxlTransport::cxlGetDeviceSize(char* _cxl_dev_path) {
-    size_t size = 0;
-    char command[256];
-    FILE *fp;
-    char line[256];
+size_t CxlTransport::cxlGetDeviceSize() {
+    // for now, get cxl_shm size from env
+    const char* env_cxl_dev_size = std::getenv("MC_CXL_DEV_SIZE");
 
-    char* dax_name = basename(_cxl_dev_path);
-    snprintf(command, sizeof(command), "daxctl list -d %s | grep size", dax_name);
+    LOG(INFO) << "MC_CXL_DEV_SIZE: " << env_cxl_dev_size;
 
-    fp = popen(command, "r");
-    if (fp == NULL) {
-        perror("Failed to get daxctl command");
+    if (env_cxl_dev_size) {
+        char* end = nullptr;
+        unsigned long long val = strtoull(env_cxl_dev_size, &end, 10);
+        if (end != env_cxl_dev_size && *end == '\0')
+            return static_cast<size_t>(val);
+    }
+    return 0;
+}
+
+int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
+    auto crc_seed = std::uint32_t(0u);
+    char* c_src = static_cast<char*>(src);
+    char* c_dst = static_cast<char*>(dest);
+    if (size < 1) {
+        return -2;
+    }
+    // Run operation
+    auto result = dml::execute<dml::hardware>(dml::copy_crc, dml::make_view(c_src, size),
+                    dml::make_view(c_dst, size), crc_seed);
+
+    // Check result
+    if (result.status == dml::status_code::ok) {
+        //LOG(INFO) << "DSA copy successed. from " << src << " to " << dest << " len:" << size;
         return 0;
     }
-
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *size_str = strstr(line, "\"size\":");
-        if (size_str) {
-            size_str += 7; // 跳过 "\"size\":"
-
-            while (*size_str && (*size_str < '0' || *size_str > '9')) {
-                size_str++;
-            }
-
-            char *endptr;
-            unsigned long long value = strtoull(size_str, &endptr, 10);
-            if (endptr != size_str) {
-                size = (size_t)value;
-            }
-            break;
-        }
+    else {
+        LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
+        //LOG(INFO) << "DSA copy failed. from " << src << " to " << dest << " len:" << size;
+        return -1;
     }
-    pclose(fp);
-    return size;
+
+    return 0;
 }
 
 int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
+    // Input validation
     if (!src || !dest) {
         LOG(ERROR) << "CxlTransport::cxlMemcpy invalid arguments: null pointer provided.";
         return -1; // null pointer
     }
-    std::memcpy(dest, src, size);
-    //Todo: memcpy accelate
-    //Todo: cpu cache flush if need
+    
+    // Validate memory bounds using the helper function
+    if (!validateMemoryBounds(dest, src, size)) {
+        return -1; // validation failed
+    }
+    
+    // Perform the memory copy
+    if (size < 32768)
+        std::memcpy(dest, src, size);
+    else
+        execute_copy_crc(dest, src, size);
+
+    // Memory barriers and cache operations
+    if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
+        // Ensure memory ordering for CXL operations
+        __sync_synchronize();
+    }
+    
     return 0; // success
+}
+
+bool CxlTransport::validateMemoryBounds(void *dest, void *src, size_t size) {
+    uintptr_t base = reinterpret_cast<uintptr_t>(cxl_base_addr);
+    uintptr_t end = base + cxl_dev_size;
+    uintptr_t dest_ptr = reinterpret_cast<uintptr_t>(dest);
+    uintptr_t src_ptr = reinterpret_cast<uintptr_t>(src);
+    
+    if (isAddressInCxlRange(dest)) {
+        uintptr_t dest_end = dest_ptr + size;
+        if (dest_end > end || dest_end < dest_ptr) {
+            LOG(ERROR) << "CxlTransport::cxlMemcpy destination out of bounds.";
+            return false;
+        }
+    }
+    
+    if (isAddressInCxlRange(src)) {
+        uintptr_t src_end = src_ptr + size;
+        if (src_end > end || src_end < src_ptr) {
+            LOG(ERROR) << "CxlTransport::cxlMemcpy source out of bounds.";
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+bool CxlTransport::isAddressInCxlRange(void *addr) {
+    if (!addr || !cxl_base_addr) return false;
+    
+    uintptr_t base = reinterpret_cast<uintptr_t>(cxl_base_addr);
+    uintptr_t end = base + cxl_dev_size;
+    uintptr_t ptr = reinterpret_cast<uintptr_t>(addr);
+    
+    return (ptr >= base && ptr < end);
 }
 
 int CxlTransport::cxlDevInit()
 {
     int fd = open(cxl_dev_path, O_RDWR);
     if (fd == -1) {
+        LOG(ERROR) << "CxlTransport: Cannot open cxl device." << strerror(errno);
         return -1;
     }
 
@@ -113,6 +170,8 @@ int CxlTransport::cxlDevInit()
         close(fd);
         return ERR_MEMORY;
     }
+    // DSA copy requires that memory has already undergone page faults
+    memset((char*)ptr, 0, cxl_dev_size);
     cxl_base_addr = ptr;
     close(fd);
     return 0;
@@ -265,11 +324,11 @@ Status CxlTransport::submitTransfer(
         __sync_fetch_and_add(&task.slice_count, 1);
         int err;
         if (slice->opcode == TransferRequest::READ)
-            //READ: Source在本地内存，Dest在CXL上
+            //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
                              slice->length);
         else
-            //WRITE: Source在本地内存，Dest在CXL上
+            //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
                              slice->length);
         if (err != 0)
@@ -282,13 +341,15 @@ Status CxlTransport::submitTransfer(
 }
 
 Status CxlTransport::submitTransferTask(
-    const std::vector<TransferRequest *> &request_list,
     const std::vector<TransferTask *> &task_list) {
-    for (size_t index = 0; index < request_list.size(); ++index) {
-        auto &request = *request_list[index];
+    for (size_t index = 0; index < task_list.size(); ++index) {
+        assert(task_list[index]);
         auto &task = *task_list[index];
+        assert(task.request);
+        auto &request = *task.request;
         uint64_t dest_cxl_offset = request.target_offset;
         task.total_bytes = request.length;
+        
         Slice *slice = getSliceCache().allocate();
         slice->source_addr = (char *)request.source;
         slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
@@ -301,11 +362,11 @@ Status CxlTransport::submitTransferTask(
         __sync_fetch_and_add(&task.slice_count, 1);
         int err;
         if (slice->opcode == TransferRequest::READ)
-            //READ: Source在本地内存，Dest在CXL上
+            //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
                              slice->length);
         else
-            //WRITE: Source在本地内存，Dest在CXL上
+            //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
                              slice->length);
         if (err != 0)

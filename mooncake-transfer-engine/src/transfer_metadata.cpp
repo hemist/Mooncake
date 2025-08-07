@@ -402,7 +402,7 @@ TransferMetadata::decodeSegmentDesc(Json::Value &segmentJSON,
             buffer.name = bufferJSON["name"].asString();
             buffer.offset = bufferJSON["offset"].asUInt64();
             buffer.length = bufferJSON["length"].asUInt64();
-            if (buffer.name.empty() || !buffer.offset || !buffer.length) {
+            if (buffer.name.empty() || !buffer.length) {
                 LOG(WARNING) << "Corrupted segment descriptor, name "
                              << segment_name << " protocol " << desc->protocol;
                 return nullptr;

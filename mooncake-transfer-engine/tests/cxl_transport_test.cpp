@@ -22,6 +22,8 @@
 #include <iomanip>
 #include <memory>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 #include "transfer_engine.h"
 #include "transport/transport.h"
@@ -44,6 +46,7 @@ DEFINE_string(protocol, "cxl", "Transfer protocol: rdma|tcp|cxl");
 
 DEFINE_string(device_name, "/dev/dax0.0", "Device name for cxl");
 
+DEFINE_int64(device_size, 1073741824, "Device Size for cxl");
 
 static void *allocateMemoryPool(size_t size, int socket_id,
                                 bool from_vram = false) {
@@ -55,6 +58,7 @@ static void freeMemoryPool(void *addr, size_t size) { numa_free(addr, size); }
 class CXLTransportTest : public ::testing::Test {
    public:
     std::shared_ptr<mooncake::TransferMetadata> metadata_client;
+    int tmp_fd = -1;
     uint8_t *addr = nullptr;
     uint8_t *base_addr;
     std::pair<std::string, uint16_t> hostname_port;
@@ -76,6 +80,15 @@ class CXLTransportTest : public ::testing::Test {
         google::InitGoogleLogging("CXLTransportTest");
         FLAGS_logtostderr = 1;
 
+        //tmp_fd = open(FLAGS_device_name.c_str(), O_RDWR | O_CREAT, 0666);
+        //ASSERT_GE(tmp_fd, 0);
+        //ASSERT_EQ(ftruncate(tmp_fd, FLAGS_device_size), 0);
+
+        // Set device name from gflags parameter
+        setenv("MC_CXL_DEV_PATH", FLAGS_device_name.c_str(), 1);
+
+        setenv("MC_CXL_DEV_SIZE", std::to_string(FLAGS_device_size).c_str(), 1);
+
         // cxl setup
         engine = std::make_unique<TransferEngine>(false);
         hostname_port = parseHostNameWithPort(FLAGS_local_server_name);
@@ -92,6 +105,8 @@ class CXLTransportTest : public ::testing::Test {
 	    cxl_xport = dynamic_cast<CxlTransport*>(xport);
         base_addr = (uint8_t*)cxl_xport->getCxlBaseAddr();
         addr = (uint8_t*) allocateMemoryPool(kDataLength, 0, false);
+        // DSA copy requires that memory has already undergone page faults
+        memset(addr, 0, kDataLength);
         int rc = engine->registerLocalMemory(base_addr + offset_1, len);
         ASSERT_EQ(rc, 0);
 
@@ -102,6 +117,10 @@ class CXLTransportTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        if (tmp_fd >= 0) { 
+            close(tmp_fd); 
+            unlink(FLAGS_device_name.c_str()); 
+        }
         google::ShutdownGoogleLogging();
         freeMemoryPool(addr, kDataLength);
     }
@@ -150,7 +169,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
         auto batch_id = xport->allocateBatchID(1);
         Status s;
         TransferRequest entry;
-        entry.opcode = TransferRequest::WRITE;
+        entry.opcode = TransferRequest::READ;
         entry.length = kDataLength;
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
@@ -183,6 +202,8 @@ TEST_F(CXLTransportTest, MultipleRead) {
         auto batch_id = xport->allocateBatchID(1);
         int ret = 0;
         void *src = allocateMemoryPool(kDataLength, 0, false);
+        // DSA copy requires that memory has already undergone page faults
+        memset(src, 0, kDataLength);
 
         TransferRequest entry;
         entry.opcode = TransferRequest::READ;

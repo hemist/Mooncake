@@ -46,7 +46,6 @@ class CxlTransport : public Transport {
                           const std::vector<TransferRequest> &entries) override;
 
     Status submitTransferTask(
-        const std::vector<TransferRequest *> &request_list,
         const std::vector<TransferTask *> &task_list) override;
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
@@ -78,9 +77,14 @@ class CxlTransport : public Transport {
 
     int cxlDevInit();
 
-    size_t cxlGetDeviceSize(char* _cxl_dev_path);
+    size_t cxlGetDeviceSize();
 
+    int execute_copy_crc(void *dest, void *src, size_t size);
     int cxlMemcpy(void *dest_addr, void *source_addr, size_t size);
+
+    bool isAddressInCxlRange(void *addr);
+
+    bool validateMemoryBounds(void *dest, void *src, size_t size);
 
    private:
     void* cxl_base_addr;
