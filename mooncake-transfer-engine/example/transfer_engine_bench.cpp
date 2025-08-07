@@ -491,10 +491,12 @@ int target() {
     addr.resize(buffer_num);
 
     if(FLAGS_protocol == "cxl") {
+#ifdef USE_CXL
         CxlTransport* derivedPtr = dynamic_cast<CxlTransport*>(xport);
         int rc = engine->registerLocalMemory(derivedPtr->getCxlBaseAddr(),
                                                 FLAGS_buffer_size);
         LOG_ASSERT(!rc);
+#endif
     } else {
         for (int i = 0; i < buffer_num; ++i) {
             addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
