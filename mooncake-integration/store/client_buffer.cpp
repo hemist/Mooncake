@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <stdexcept>
+#include <cstring>
 
 namespace mooncake {
 
@@ -12,6 +13,8 @@ ClientBufferAllocator::ClientBufferAllocator(size_t size) : buffer_size_(size) {
     if (!buffer_) {
         throw std::bad_alloc();
     }
+
+    std::memset(buffer_, 0, size);
 
     allocator_ = mooncake::offset_allocator::OffsetAllocator::create(
         reinterpret_cast<uint64_t>(buffer_), size);
