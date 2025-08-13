@@ -54,6 +54,8 @@ using namespace mooncake;
 
 namespace mooncake {
 
+DEFINE_string(protocol, "tcp", "Transfer protocol");
+
 class TCPTransportTest : public ::testing::Test {
    public:
    protected:
@@ -133,7 +135,7 @@ TEST_F(TCPTransportTest, Writetest) {
     entry.source = (uint8_t *)(addr);
     entry.target_id = segment_id;
     entry.target_offset = remote_base;
-    s = engine->submitTransfer(batch_id, {entry});
+    s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
     LOG_ASSERT(s.ok());
     bool completed = false;
     TransferStatus status;
@@ -178,7 +180,7 @@ TEST_F(TCPTransportTest, WriteAndReadtest) {
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -202,7 +204,7 @@ TEST_F(TCPTransportTest, WriteAndReadtest) {
         entry.source = (uint8_t *)(addr) + kDataLength;
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -251,7 +253,7 @@ TEST_F(TCPTransportTest, WriteAndRead2test) {
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -274,7 +276,7 @@ TEST_F(TCPTransportTest, WriteAndRead2test) {
         entry.source = (uint8_t *)(addr) + kDataLength;
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -301,7 +303,7 @@ TEST_F(TCPTransportTest, WriteAndRead2test) {
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -324,7 +326,7 @@ TEST_F(TCPTransportTest, WriteAndRead2test) {
         entry.source = (uint8_t *)(addr) + kDataLength;
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;

@@ -216,7 +216,7 @@ Status initiatorWorker(TransferEngine *engine, SegmentID segment_id,
         TransferMetadata::NotifyDesc notify;
         notify.name = "agent1";
         notify.notify_msg = "notification" + std::to_string(transfer_count);
-        s = engine->submitTransferWithNotify(batch_id, requests, notify);
+        s = engine->submitTransferWithNotify(batch_id, requests, notify, FLAGS_protocol);
         if (!s.ok()) LOG(ERROR) << s.ToString();
         LOG_ASSERT(s.ok());
         for (int task_id = 0; task_id < FLAGS_batch_size; ++task_id) {

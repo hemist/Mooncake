@@ -205,7 +205,7 @@ int initiator() {
         requests.emplace_back(entry);
     }
 
-    s = engine->submitTransfer(batch_id, requests);
+    s = engine->submitTransfer(batch_id, requests, FLAGS_protocol);
     LOG_ASSERT(s.ok());
     bool completed = false;
     TransferStatus status;
@@ -243,7 +243,7 @@ int initiator() {
         requests2.emplace_back(entry);
     }
     completed = false;
-    s = engine->submitTransfer(batch_id_2, requests2);
+    s = engine->submitTransfer(batch_id_2, requests2, FLAGS_protocol);
     LOG_ASSERT(s.ok());
     while (!completed) {
         Status s = engine->getBatchTransferStatus(batch_id_2, status);
@@ -310,7 +310,7 @@ int initiator() {
             requests.emplace_back(entry);
         }
 
-        s = engine->submitTransfer(batch_id, requests);
+        s = engine->submitTransfer(batch_id, requests, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;

@@ -70,7 +70,6 @@ class CXLTransportTest : public ::testing::Test {
     const size_t offset_1 = 2 * 1024 * 1024;
     const size_t offset_2 = 6 * 1024 * 1024;
     const size_t len = 50 * 1024 * 1024;
-    CxlTransport *cxl_xport;
     Transport *xport;
     void **args;
     mooncake::Transport::SegmentID segment_id;
@@ -105,18 +104,18 @@ class CXLTransportTest : public ::testing::Test {
                      hostname_port.first.c_str(),
                      hostname_port.second + offset++);
         xport = nullptr;
+        xport = engine->getTransport(FLAGS_protocol.c_str());
 
         args = (void **)malloc(2 * sizeof(void *));
         args[0] = nullptr;
-        xport = engine->installTransport("cxl", args);
         ASSERT_NE(xport, nullptr);
 
-	    cxl_xport = dynamic_cast<CxlTransport*>(xport);
-        base_addr = (uint8_t*)cxl_xport->getCxlBaseAddr();
+        base_addr = (uint8_t*)engine->getBaseAddr();
         addr = (uint8_t*) allocateMemoryPool(kDataLength, 0, false);
         // DSA copy requires that memory has already undergone page faults
         memset(addr, 0, kDataLength);
-        int rc = engine->registerLocalMemory(base_addr + offset_1, len);
+        buffer_map[FLAGS_protocol].emplace_back(base_addr, len);
+        int rc = engine->registerLocalMemory(buffer_map);
         ASSERT_EQ(rc, 0);
 #ifdef USE_CXL_CUDA
         cuda_status = cudaMalloc((void**)&cu_addr, kDataLength);
@@ -159,7 +158,7 @@ TEST_F(CXLTransportTest, MultiWrite) {
         entry.target_id = segment_id;
         entry.target_offset = offset_1;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         
         bool completed = false;
@@ -195,7 +194,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
         entry.target_id = segment_id;
         entry.target_offset = offset_2;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         
         bool completed = false;
@@ -233,7 +232,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
         entry.target_offset = offset_2;
         Status s;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         ASSERT_EQ(s, Status::OK());
 
         bool completed = false;
@@ -278,7 +277,7 @@ TEST_F(CXLTransportTest, MultipleWriteThenReadCuda) {
         entry.target_id = segment_id;
         entry.target_offset = offset_3;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         
         bool completed = false;
@@ -313,7 +312,7 @@ TEST_F(CXLTransportTest, MultipleWriteThenReadCuda) {
         entry.target_offset = offset_3;
         Status s;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         ASSERT_EQ(s, Status::OK());
 
         bool completed = false;

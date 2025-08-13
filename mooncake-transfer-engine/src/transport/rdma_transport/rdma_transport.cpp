@@ -108,12 +108,14 @@ int RdmaTransport::registerLocalMemory(void *addr, size_t length,
         buffer_desc.name = entries[0].location;
         buffer_desc.addr = (uint64_t)addr;
         buffer_desc.length = length;
+        buffer_desc.protocal = "rdma";
         int rc = metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
         if (rc) return rc;
     } else {
         buffer_desc.name = name;
         buffer_desc.addr = (uint64_t)addr;
         buffer_desc.length = length;
+        buffer_desc.protocal = "rdma";
         int rc = metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
 
         if (rc) return rc;
@@ -135,7 +137,7 @@ int RdmaTransport::allocateLocalSegmentID() {
     auto desc = std::make_shared<SegmentDesc>();
     if (!desc) return ERR_MEMORY;
     desc->name = local_server_name_;
-    desc->protocol = "rdma";
+    desc->protocol.push_back("rdma");
     for (auto &entry : context_list_) {
         TransferMetadata::DeviceDesc device_desc;
         device_desc.name = entry->deviceName();

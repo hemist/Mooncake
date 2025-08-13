@@ -488,8 +488,10 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         return std::nullopt;
     }
 
+    std::string proto_str("cxl");
+
     // Submit transfer
-    Status s = engine_.submitTransfer(batch_id, requests);
+    Status s = engine_.submitTransfer(batch_id, requests, proto_str);
     if (!s.ok()) {
         LOG(ERROR) << "Failed to submit all transfers, error code is "
                    << s.code();
