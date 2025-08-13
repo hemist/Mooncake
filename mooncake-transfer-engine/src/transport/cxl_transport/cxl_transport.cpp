@@ -32,7 +32,7 @@
 #include <fcntl.h>    // For O_RDWR, O_CREAT, etc.
 #include <unistd.h>   // For open(), close(), read(), write()
 #include <sys/mman.h> // For mmap, munmap
-#include <dml/dml.hpp>
+// #include <dml/dml.hpp>
 
 namespace mooncake {
 
@@ -69,7 +69,7 @@ size_t CxlTransport::cxlGetDeviceSize() {
     }
     return 0;
 }
-
+/*
 int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
     auto crc_seed = std::uint32_t(0u);
     char* c_src = static_cast<char*>(src);
@@ -94,6 +94,7 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
 
     return 0;
 }
+*/
 
 int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     // Input validation
@@ -107,11 +108,14 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
         return -1; // validation failed
     }
     
+    /*
     // Perform the memory copy
     if (size < 32768)
         std::memcpy(dest, src, size);
     else
         execute_copy_crc(dest, src, size);
+    */
+    std::memcpy(dest, src, size);
 
     // Memory barriers and cache operations
     if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
@@ -209,7 +213,7 @@ int CxlTransport::allocateLocalSegmentID() {
     auto desc = std::make_shared<SegmentDesc>();
     if (!desc) return ERR_MEMORY;
     desc->name = local_server_name_;
-    desc->protocol = "cxl";
+    desc->protocol.push_back("cxl");
     desc->cxl_base_addr = (uint64_t)cxl_base_addr;
     desc->cxl_name = cxl_dev_path;
     metadata_->addLocalSegment(LOCAL_SEGMENT_ID, local_server_name_,
@@ -247,6 +251,7 @@ int CxlTransport::registerLocalMemory(void *addr, size_t length,
 
     cxl_buffer_desc.offset = (uint64_t)addr - (uint64_t)cxl_base_addr;
     cxl_buffer_desc.length = length;
+    cxl_buffer_desc.protocal = "cxl";
     return metadata_->addLocalMemoryBuffer(cxl_buffer_desc, update_metadata);
 }
 

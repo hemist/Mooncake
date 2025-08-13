@@ -15,6 +15,7 @@ DEFINE_string(metadata_server, "127.0.0.1:2379", "etcd server host address");
 DEFINE_string(local_server_name, "cuda_server:12345", "Local server name");
 DEFINE_string(segment_id, "cuda_server:12345", "Segment ID to access data");
 DEFINE_int32(gpu_id, 0, "GPU ID to use");
+DEFINE_string(protocol, "nvlink", "Transfer protocol");
 
 static void checkCudaError(cudaError_t result, const char *message) {
     if (result != cudaSuccess) {
@@ -79,7 +80,7 @@ TEST(NvlinkTransportTest, WriteAndRead) {
         entry.source = client_buffer;
         entry.target_id = segment_id;
         entry.target_offset = (uint64_t)server_buffer;
-        Status s = client_engine->submitTransfer(batch_id, {entry});
+        Status s = client_engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         ASSERT_TRUE(s.ok());
 
         // Wait for completion
@@ -103,7 +104,7 @@ TEST(NvlinkTransportTest, WriteAndRead) {
         entry.source = (char*)client_buffer + kDataLength;
         entry.target_id = segment_id;
         entry.target_offset = (uint64_t)server_buffer;
-        Status s = client_engine->submitTransfer(batch_id, {entry});
+        Status s = client_engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         ASSERT_TRUE(s.ok());
 
         // Wait for completion

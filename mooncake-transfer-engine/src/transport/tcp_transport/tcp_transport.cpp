@@ -258,7 +258,7 @@ int TcpTransport::allocateLocalSegmentID(int tcp_data_port) {
     auto desc = std::make_shared<SegmentDesc>();
     if (!desc) return ERR_MEMORY;
     desc->name = local_server_name_;
-    desc->protocol = "tcp";
+    desc->protocol.push_back("tcp");
     desc->tcp_data_port = tcp_data_port;
     metadata_->addLocalSegment(LOCAL_SEGMENT_ID, local_server_name_,
                                std::move(desc));
@@ -274,6 +274,7 @@ int TcpTransport::registerLocalMemory(void *addr, size_t length,
     buffer_desc.name = local_server_name_;
     buffer_desc.addr = (uint64_t)addr;
     buffer_desc.length = length;
+    buffer_desc.protocal = "tcp";
     return metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
 }
 

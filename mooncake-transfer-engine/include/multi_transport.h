@@ -39,7 +39,8 @@ class MultiTransport {
     Status freeBatchID(BatchID batch_id);
 
     Status submitTransfer(BatchID batch_id,
-                          const std::vector<TransferRequest> &entries);
+                          const std::vector<TransferRequest> &entries,
+                          std::string &proto);
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status);
@@ -56,7 +57,7 @@ class MultiTransport {
     void *getBaseAddr();
 
    private:
-    Status selectTransport(const TransferRequest &entry, Transport *&transport);
+    Status selectTransport(const TransferRequest &entry, Transport *&transport, std::string &preferred_proto);
 
    private:
     std::shared_ptr<TransferMetadata> metadata_;

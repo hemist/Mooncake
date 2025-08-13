@@ -111,7 +111,7 @@ int TransferEnginePy::initializeExt(const char *local_hostname,
                                     const char *protocol,
                                     const char *device_name,
                                     const char *metadata_type) {
-    (void)(protocol);
+    proto_ = protocol ? protocol : "tcp";
     std::string conn_string = buildConnString(metadata_type, metadata_server);
 
     auto device_name_safe = device_name ? std::string(device_name) : "";
@@ -294,7 +294,7 @@ int TransferEnginePy::transferSync(const char *target_hostname,
         entry.target_offset = peer_buffer_address;
         entry.advise_retry_cnt = retry;
 
-        Status s = engine_->submitTransfer(batch_id, {entry});
+        Status s = engine_->submitTransfer(batch_id, {entry}, proto_);
         if (!s.ok()) return -1;
 
         TransferStatus status;
@@ -373,7 +373,7 @@ int TransferEnginePy::batchTransferSync(const char *target_hostname,
 
     for (int retry = 0; retry < max_retry; ++retry) {
         auto batch_id = engine_->allocateBatchID(batch_size);
-        Status s = engine_->submitTransfer(batch_id, entries);
+        Status s = engine_->submitTransfer(batch_id, entries, proto_);
         if (!s.ok()) {
             engine_->freeBatchID(batch_id);
             return -1;
@@ -462,7 +462,7 @@ batch_id_t TransferEnginePy::batchTransferAsync(const char *target_hostname,
         auto start_ts = getCurrentTimeInNano();
         batch_desc->start_timestamp = start_ts;
 
-        Status s = engine_->submitTransfer(batch_id, entries);
+        Status s = engine_->submitTransfer(batch_id, entries, proto_);
         if (!s.ok()) {
             engine_->freeBatchID(batch_id);
             return 0;
@@ -558,7 +558,7 @@ batch_id_t TransferEnginePy::transferSubmitWrite(const char *target_hostname,
     entry.target_id = handle;
     entry.target_offset = peer_buffer_address;
 
-    Status s = engine_->submitTransfer(batch_id, {entry});
+    Status s = engine_->submitTransfer(batch_id, {entry}, proto_);
     if (!s.ok()) return -1;
 
     return batch_id;

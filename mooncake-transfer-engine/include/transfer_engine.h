@@ -84,6 +84,10 @@ class TransferEngine {
 
     int freeEngine();
 
+    Transport *getTransport(const std::string &proto) {
+        return multi_transports_->getTransport(proto);
+    }
+
     // Only for testing.
     Transport *installTransport(const std::string &proto, void **args);
 
@@ -120,15 +124,17 @@ class TransferEngine {
     }
 
     Status submitTransfer(BatchID batch_id,
-                          const std::vector<TransferRequest> &entries) {
-        return multi_transports_->submitTransfer(batch_id, entries);
+                          const std::vector<TransferRequest> &entries,
+                          std::string &proto) {
+        return multi_transports_->submitTransfer(batch_id, entries, proto);
     }
 
     Status submitTransferWithNotify(BatchID batch_id,
                                     const std::vector<TransferRequest> &entries,
-                                    TransferMetadata::NotifyDesc notify_msg) {
+                                    TransferMetadata::NotifyDesc notify_msg,
+                                    std::string &proto) {
         auto target_id = entries[0].target_id;
-        Status s = multi_transports_->submitTransfer(batch_id, entries);
+        Status s = multi_transports_->submitTransfer(batch_id, entries, proto);
         if (!s.ok()) {
             return s;
         }

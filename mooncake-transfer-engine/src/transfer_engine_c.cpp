@@ -123,7 +123,8 @@ batch_id_t allocateBatchID(transfer_engine_t engine, size_t batch_size) {
 }
 
 int submitTransfer(transfer_engine_t engine, batch_id_t batch_id,
-                   struct transfer_request *entries, size_t count) {
+                   struct transfer_request *entries, size_t count, 
+                   char *proto) {
     TransferEngine *native = (TransferEngine *)engine;
     std::vector<Transport::TransferRequest> native_entries;
     native_entries.resize(count);
@@ -135,16 +136,17 @@ int submitTransfer(transfer_engine_t engine, batch_id_t batch_id,
         native_entries[index].target_offset = entries[index].target_offset;
         native_entries[index].length = entries[index].length;
     }
+    std::string proto_str(proto);
     Status s =
-        native->submitTransfer((Transport::BatchID)batch_id, native_entries);
+        native->submitTransfer((Transport::BatchID)batch_id, native_entries, proto_str);
     return (int)s.code();
 }
 
 int submitTransferWithNotify(transfer_engine_t engine, batch_id_t batch_id,
                              struct transfer_request *entries, size_t count,
-                             notify_msg_t notify_msg) {
+                             notify_msg_t notify_msg, char *proto) {
     uint64_t target_id = entries[0].target_id;
-    int rc = submitTransfer(engine, batch_id, entries, count);
+    int rc = submitTransfer(engine, batch_id, entries, count, proto);
     if (rc) {
         return rc;
     }

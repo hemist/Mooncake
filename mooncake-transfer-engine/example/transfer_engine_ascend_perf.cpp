@@ -198,7 +198,7 @@ int initiator() {
     entry.target_offset = remote_base; 
     tmp_requests.emplace_back(entry);
 
-    s = engine->submitTransfer(tmp_batch_id, tmp_requests);
+    s = engine->submitTransfer(tmp_batch_id, tmp_requests, FLAGS_protocol);
     LOG_ASSERT(s.ok());
 
     bool completed = false;
@@ -236,7 +236,7 @@ int initiator() {
             entry.target_offset = remote_base + block_size * 2 * j; 
             requests.emplace_back(entry);
         }
-        s = engine->submitTransfer(batch_id, requests);
+        s = engine->submitTransfer(batch_id, requests, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;

@@ -152,6 +152,7 @@ class TransferEnginePy {
    private:
     std::shared_ptr<TransferEngine> engine_;
     Transport *xport_;
+    std::string proto_;
 
     std::mutex mutex_;
     std::vector<std::stack<char *>> free_list_;

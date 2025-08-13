@@ -191,7 +191,7 @@ Status initiatorWorker(TransferEngine *engine, SegmentID segment_id, int thread_
             requests.emplace_back(entry);
         }
 
-        s = engine->submitTransfer(batch_id, requests);
+        s = engine->submitTransfer(batch_id, requests, FLAGS_protocol);
         if (!s.ok()) 
             LOG(INFO) << "Found Failed Requests";
         else {

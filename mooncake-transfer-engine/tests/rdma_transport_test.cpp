@@ -135,7 +135,7 @@ int initiatorWorker(TransferEngine *engine, SegmentID segment_id, int thread_id,
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
@@ -164,7 +164,7 @@ int initiatorWorker(TransferEngine *engine, SegmentID segment_id, int thread_id,
         entry.source = (uint8_t *)(addr) + kDataLength;
         entry.target_id = segment_id;
         entry.target_offset = remote_base;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;

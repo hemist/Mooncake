@@ -227,7 +227,7 @@ Status initiatorWorker(TransferEngine *engine, SegmentID segment_id,
             requests.emplace_back(entry);
         }
 
-        s = engine->submitTransfer(batch_id, requests);
+        s = engine->submitTransfer(batch_id, requests, FLAGS_protocol);
         if (!s.ok()) LOG(ERROR) << s.ToString();
         LOG_ASSERT(s.ok());
         for (int task_id = 0; task_id < FLAGS_batch_size; ++task_id) {

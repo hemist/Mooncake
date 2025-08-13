@@ -31,6 +31,7 @@ namespace mooncake {
 
 DEFINE_string(metadata_server, "127.0.0.1:2379",
               "central metadata server for transfer engine");
+DEFINE_string(protocol, "nvlink", "Transfer protocol");
 
 class RDMALoopbackTest : public ::testing::Test {
    public:
@@ -71,7 +72,7 @@ TEST_F(RDMALoopbackTest, MultiWrite) {
         entry.source = (uint8_t *)(addr);
         entry.target_id = LOCAL_SEGMENT_ID;
         entry.target_offset = (uint64_t)addr + kDataLength;
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         bool completed = false;
         TransferStatus status;
