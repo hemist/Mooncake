@@ -111,6 +111,7 @@ int TransferEnginePy::initializeExt(const char *local_hostname,
                                     const char *protocol,
                                     const char *device_name,
                                     const char *metadata_type) {
+    LOG(INFO) << "Init protocal: " << protocol;
     proto_ = protocol ? protocol : "tcp";
     std::string conn_string = buildConnString(metadata_type, metadata_server);
 
@@ -131,7 +132,9 @@ int TransferEnginePy::initializeExt(const char *local_hostname,
 
     free_list_.resize(kSlabSizeKBTabLen);
 #ifndef USE_ASCEND
-    doBuddyAllocate(kMaxClassId);
+    if (proto_ != "cxl") {
+        doBuddyAllocate(kMaxClassId);
+    }
 #endif
     return 0;
 }
@@ -141,7 +144,11 @@ int TransferEnginePy::getRpcPort() { return engine_->getRpcPort(); }
 char *TransferEnginePy::allocateRawBuffer(size_t capacity) {
     auto buffer = allocateMemory(capacity);
     if (!buffer) return nullptr;
-    int ret = engine_->registerLocalMemory(buffer, capacity, kWildcardLocation);
+    if (proto_ == "") return nullptr;
+    
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map[proto_].emplace_back(buffer, capacity, kWildcardLocation);
+    int ret = engine_->registerLocalMemory(buffer_map);
     if (ret) {
         freeMemory(buffer);
         return nullptr;
@@ -178,6 +185,10 @@ int TransferEnginePy::doBuddyAllocate(int class_id) {
 }
 
 uintptr_t TransferEnginePy::allocateManagedBuffer(size_t length) {
+    if (proto_ == "cxl") {
+        LOG(ERROR) << "CXL does not support managed buffer";
+        return 0;
+    }
     std::lock_guard<std::mutex> guard(mutex_);
     int class_id = findClassId(length);
     if (class_id < 0) {
@@ -194,12 +205,18 @@ uintptr_t TransferEnginePy::allocateManagedBuffer(size_t length) {
 }
 
 int TransferEnginePy::freeManagedBuffer(uintptr_t buffer_addr, size_t length) {
+    if (proto_ == "cxl") {
+        LOG(ERROR) << "CXL does not support managed buffer";
+        return 0;
+    }
     std::lock_guard<std::mutex> guard(mutex_);
     auto buffer = (char *)buffer_addr;
     int class_id = findClassId(length);
     if (class_id < 0) {
         large_buffer_list_.erase(buffer);
-        engine_->unregisterLocalMemory(buffer);
+        std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+        buffer_map[proto_].emplace_back(buffer);
+        engine_->unregisterLocalMemory(buffer_map);
         freeMemory(buffer);
         return 0;
     }
@@ -604,13 +621,29 @@ int TransferEnginePy::batchUnregisterMemory(std::vector<uintptr_t> buffer_addres
 }
 
 int TransferEnginePy::registerMemory(uintptr_t buffer_addr, size_t capacity) {
+    if (proto_ == "cxl") {
+        auto base_addr = engine_->getBaseAddr();
+        if (!base_addr) return -1;
+        buffer_addr = buffer_addr + reinterpret_cast<uintptr_t>(base_addr);
+    }
+
     char *buffer = reinterpret_cast<char *>(buffer_addr);
-    return engine_->registerLocalMemory(buffer, capacity);
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map[proto_].emplace_back(buffer, capacity);
+    return engine_->registerLocalMemory(buffer_map);
 }
 
 int TransferEnginePy::unregisterMemory(uintptr_t buffer_addr) {
+    if (proto_ == "cxl") {
+        auto base_addr = engine_->getBaseAddr();
+        if (!base_addr) return -1;
+        buffer_addr = buffer_addr + reinterpret_cast<uintptr_t>(base_addr);
+    }
+
     char *buffer = reinterpret_cast<char *>(buffer_addr);
-    return engine_->unregisterLocalMemory(buffer);
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map[proto_].emplace_back(buffer);
+    return engine_->unregisterLocalMemory(buffer_map);
 }
 
 uintptr_t TransferEnginePy::getFirstBufferAddress(

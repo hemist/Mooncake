@@ -25,6 +25,9 @@ class PutOperation;
  */
 class Client {
    public:
+    using RegisteredBuffer = mooncake::TransferEngine::RegisteredBuffer;
+    
+   public:
     ~Client();
 
     /**

@@ -323,6 +323,7 @@ int initiator() {
     }
 
     std::vector<void *> addr;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 #ifdef USE_CUDA
     if (FLAGS_use_vram) {
         int gpu_num;
@@ -353,23 +354,21 @@ int initiator() {
             name_prefix = "cpu:";
             name_suffix = i;
         }
-        int rc = engine->registerLocalMemory(
-            addr[i], FLAGS_buffer_size,
-            name_prefix + std::to_string(name_suffix));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, name_prefix + std::to_string(name_suffix));
     }
 #else
     LOG(INFO) << "DRAM is used, numa node num: " << NR_SOCKETS;
     addr.resize(buffer_num);
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-        if (FLAGS_protocol != "cxl") {
-            int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                                "cpu:" + std::to_string(i));
-            LOG_ASSERT(!rc);
-        }
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cpu: " + std::to_string(i));
     }
 #endif
+
+    if (FLAGS_protocol != "cxl") {
+        int rc = engine->registerLocalMemory(buffer_map);
+        LOG_ASSERT(!rc);
+    }
 
     auto segment_id = engine->openSegment(FLAGS_segment_id.c_str());
 
@@ -401,11 +400,10 @@ int initiator() {
                      duration);
 
     for (int i = 0; i < buffer_num; ++i) {
-        if (FLAGS_protocol != "cxl") {
-            engine->unregisterLocalMemory(addr[i]);
-        }
         freeMemoryPool(addr[i], FLAGS_buffer_size);
     }
+    engine->unregisterLocalMemory(buffer_map);
+    buffer_map.clear();
 
     return 0;
 }
@@ -449,6 +447,7 @@ int target() {
     }
 
     std::vector<void *> addr;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 #ifdef USE_CUDA
     if (FLAGS_use_vram) {
         int gpu_num;
@@ -481,10 +480,7 @@ int target() {
             name_prefix = "cpu:";
             name_suffix = i;
         }
-        int rc = engine->registerLocalMemory(
-            addr[i], FLAGS_buffer_size,
-            name_prefix + std::to_string(name_suffix));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, name_prefix + std::to_string(name_suffix));
     }
 #else
     LOG(INFO) << "DRAM is used, numa node num: " << NR_SOCKETS;
@@ -493,29 +489,29 @@ int target() {
     if(FLAGS_protocol == "cxl") {
 #ifdef USE_CXL
         CxlTransport* derivedPtr = dynamic_cast<CxlTransport*>(xport);
-        int rc = engine->registerLocalMemory(derivedPtr->getCxlBaseAddr(),
-                                                FLAGS_buffer_size);
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(derivedPtr->getCxlBaseAddr(), FLAGS_buffer_size);
 #endif
     } else {
         for (int i = 0; i < buffer_num; ++i) {
             addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-            int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                                "cpu:" + std::to_string(i));
-            LOG_ASSERT(!rc);
+            buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cpu:" + std::to_string(i));
         }
     }
 #endif
 
+    int rc = engine->registerLocalMemory(buffer_map);
+    LOG_ASSERT(!rc);
+
     while (target_running) sleep(1);
     for (int i = 0; i < buffer_num; ++i) {
-        engine->unregisterLocalMemory(addr[i]);
 #ifdef USE_MNNVL
         mooncake::NvlinkTransport::freePinnedLocalMemory(addr[i]);
 #else
         freeMemoryPool(addr[i], FLAGS_buffer_size);
 #endif
     }
+    engine->unregisterLocalMemory(buffer_map);
+    buffer_map.clear();
 
     return 0;
 }

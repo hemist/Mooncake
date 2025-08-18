@@ -134,8 +134,8 @@ int RdmaTransport::unregisterLocalMemory(void *addr, bool update_metadata) {
 }
 
 int RdmaTransport::allocateLocalSegmentID() {
-    auto desc = std::make_shared<SegmentDesc>();
-    if (!desc) return ERR_MEMORY;
+    auto desc = metadata_->getSegmentDesc(local_server_name_);
+    if (!desc) desc = std::make_shared<SegmentDesc>();
     desc->name = local_server_name_;
     desc->protocol.push_back("rdma");
     for (auto &entry : context_list_) {

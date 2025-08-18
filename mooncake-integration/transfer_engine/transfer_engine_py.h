@@ -32,6 +32,7 @@
 
 using namespace mooncake;
 
+const static size_t kDefaultCxllBufferSize = 4ull * 1024 * 1024 * 1024;
 const static size_t kDefaultBufferCapacity = 2ull * 1024 * 1024 * 1024;
 const static size_t kSlabSizeKBTabLen = 16;
 const static size_t kMaxClassId = kSlabSizeKBTabLen - 1;
@@ -46,6 +47,7 @@ class TransferEnginePy {
 
    public:
     using BatchDesc = Transport::BatchDesc;
+    using RegisteredBuffer = mooncake::TransferEngine::RegisteredBuffer;
 
    public:
     TransferEnginePy();

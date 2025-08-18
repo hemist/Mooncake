@@ -257,23 +257,24 @@ int initiator() {
     LOG_ASSERT(xport);
 
     void *addr = nullptr;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 #ifdef USE_CUDA
     addr = allocateMemoryPool(ram_buffer_size, 0, FLAGS_use_vram);
     std::string name_prefix = FLAGS_use_vram ? "cuda:" : "cpu:";
     int name_suffix = FLAGS_use_vram ? FLAGS_gpu_id : 0;
-    int rc = engine->registerLocalMemory(
-        addr, ram_buffer_size, name_prefix + std::to_string(name_suffix));
-    LOG_ASSERT(!rc);
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, name_prefix + std::to_string(name_suffix));
 #else
     addr = allocateMemoryPool(ram_buffer_size, 0, false);
-    int rc = engine->registerLocalMemory(addr, ram_buffer_size, kWildcardLocation);
-    LOG_ASSERT(!rc);
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, kWildcardLocation);
 #endif
+
+    int rc = engine->registerLocalMemory(buffer_map);
+    LOG_ASSERT(!rc);
 
     auto segment_id = engine->openSegment(FLAGS_segment_id.c_str());
     std::thread workers(initiatorWorker, engine.get(), segment_id, 0, addr);
     workers.join();
-    engine->unregisterLocalMemory(addr);
+    engine->unregisterLocalMemory(buffer_map);
     freeMemoryPool(addr, ram_buffer_size);
     return 0;
 }
@@ -302,13 +303,15 @@ int target() {
     }
 
     void *addr = nullptr;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
     addr = allocateMemoryPool(ram_buffer_size, 0);
-    int rc = engine->registerLocalMemory(addr, ram_buffer_size, "cpu:0");
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, "cpu:0");
+    int rc = engine->registerLocalMemory(buffer_map);
     LOG_ASSERT(!rc);
 
     while (true) sleep(1);
 
-    engine->unregisterLocalMemory(addr);
+    engine->unregisterLocalMemory(buffer_map);
     freeMemoryPool(addr, ram_buffer_size);
     return 0;
 }

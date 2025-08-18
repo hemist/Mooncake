@@ -333,6 +333,8 @@ TransferMetadata::decodeSegmentDesc(Json::Value &segmentJSON,
         } else if (protocalStr == "cxl") {
             desc->cxl_name = segmentJSON["cxl_name"].asString();
             desc->cxl_base_addr = segmentJSON["cxl_base_addr"].asUInt64();
+        } else if (protocalStr == "tcp") {
+            continue;
         } else {
             LOG(ERROR) << "Unsupported segment descriptor, name " << segment_name
                     << " protocol " << protocalStr;
@@ -391,7 +393,7 @@ TransferMetadata::decodeSegmentDesc(Json::Value &segmentJSON,
                                 << "buffer shm_name " << buffer.shm_name;
                     return nullptr;
                 }
-            } else if (buffer.protocal == "cxl") {
+            } else if (buffer.protocal == "cxl" || buffer.protocal == "tcp") {
                 buffer.offset = bufferJSON["offset"].asUInt64();
             } else {
                 LOG(ERROR) << "Unsupported segment descriptor, name " << segment_name
@@ -434,8 +436,7 @@ std::shared_ptr<TransferMetadata::SegmentDesc> TransferMetadata::getSegmentDesc(
     } else {
         if (!storage_plugin_->get(getFullMetadataKey(segment_name),
                                   peer_json)) {
-            LOG(WARNING) << "Failed to retrieve segment descriptor, name "
-                         << segment_name;
+            // LOG(WARNING) << "Failed to retrieve segment descriptor, name " << segment_name;
             return nullptr;
         }
     }

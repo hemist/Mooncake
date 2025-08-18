@@ -75,12 +75,12 @@ class CXLTransportTest : public ::testing::Test {
     mooncake::Transport::SegmentID segment_id;
     std::shared_ptr<TransferMetadata::SegmentDesc> segment_desc;
     const size_t kDataLength = 4 * 1024 * 1024;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 #ifdef USE_CXL_CUDA
     cudaError_t cuda_status;
     uint8_t *cu_addr = nullptr;
     const size_t offset_3 = 12 * 1024 * 1024;
 #endif
-    
 
    protected:
     void SetUp() override {
@@ -131,7 +131,7 @@ class CXLTransportTest : public ::testing::Test {
         segment_id = engine->openSegment(FLAGS_local_server_name.c_str());
         // bindToSocket(0);
         segment_desc = engine->getMetadata()->getSegmentDescByID(segment_id);
-
+        buffer_map.clear();
     }
 
     void TearDown() override {
@@ -254,6 +254,9 @@ TEST_F(CXLTransportTest, MultipleRead) {
 
         freeMemoryPool(src, kDataLength);
     }
+    buffer_map[FLAGS_protocol].emplace_back(addr);
+    engine->unregisterLocalMemory(buffer_map);
+    
 }
 
 #ifdef USE_CXL_CUDA
