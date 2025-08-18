@@ -210,8 +210,8 @@ int CxlTransport::install(std::string &local_server_name,
 }
 
 int CxlTransport::allocateLocalSegmentID() {
-    auto desc = std::make_shared<SegmentDesc>();
-    if (!desc) return ERR_MEMORY;
+    auto desc = metadata_->getSegmentDesc(local_server_name_);
+    if (!desc) desc = std::make_shared<SegmentDesc>();
     desc->name = local_server_name_;
     desc->protocol.push_back("cxl");
     desc->cxl_base_addr = (uint64_t)cxl_base_addr;

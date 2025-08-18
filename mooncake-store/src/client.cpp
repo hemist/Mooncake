@@ -962,8 +962,12 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         }
     }
 
-    int rc = transfer_engine_.registerLocalMemory(
-        (void*)buffer, size, kWildcardLocation, true, true);
+    // LYH: workaround for now
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    std::string proto = is_cxl ? "cxl" : "rdma";
+    buffer_map[proto].emplace_back((void *)buffer, size, kWildcardLocation, true, true);
+
+    int rc = transfer_engine_.registerLocalMemory(buffer_map);
     if (rc != 0) {
         LOG(ERROR) << "register_local_memory_failed base=" << buffer
                    << " size=" << size << ", error=" << rc;
@@ -981,7 +985,7 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         ErrorCode err = mount_result.error();
         LOG(ERROR) << "mount_segment_to_master_failed base=" << buffer
                    << " size=" << size << ", error=" << err;
-        transfer_engine_.unregisterLocalMemory((void*)buffer);
+        transfer_engine_.unregisterLocalMemory(buffer_map);
         LOG(INFO) << "unregister_local_memory base=" << buffer;
         
         return tl::unexpected(err);
@@ -1018,8 +1022,10 @@ tl::expected<void, ErrorCode> Client::UnmountSegment(const void* buffer,
         return tl::unexpected(err);
     }
 
-    int rc = transfer_engine_.unregisterLocalMemory(
-        reinterpret_cast<void*>(segment->second.base));
+    // LYH: workaround for now
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map["rdma"].emplace_back(reinterpret_cast<void*>(segment->second.base));
+    int rc = transfer_engine_.unregisterLocalMemory(buffer_map);
     if (rc != 0) {
         LOG(ERROR) << "Failed to unregister transfer buffer with transfer "
                       "engine ret is "
@@ -1038,8 +1044,11 @@ tl::expected<void, ErrorCode> Client::UnmountSegment(const void* buffer,
 tl::expected<void, ErrorCode> Client::RegisterLocalMemory(
     void* addr, size_t length, const std::string& location,
     bool remote_accessible, bool update_metadata) {
-    if (this->transfer_engine_.registerLocalMemory(
-            addr, length, location, remote_accessible, update_metadata) != 0) {
+    
+    // LYH: workaround for now
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map["rdma"].emplace_back(addr, length, location, remote_accessible, update_metadata);
+    if (this->transfer_engine_.registerLocalMemory(buffer_map) != 0) {
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
     return {};
@@ -1047,8 +1056,10 @@ tl::expected<void, ErrorCode> Client::RegisterLocalMemory(
 
 tl::expected<void, ErrorCode> Client::unregisterLocalMemory(
     void* addr, bool update_metadata) {
-    if (this->transfer_engine_.unregisterLocalMemory(addr, update_metadata) !=
-        0) {
+    // LYH: workaround for now
+    std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
+    buffer_map["rdma"].emplace_back(addr, 0, kWildcardLocation, true, update_metadata);
+    if (this->transfer_engine_.unregisterLocalMemory(buffer_map) != 0) {
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
     return {};

@@ -255,8 +255,8 @@ int TcpTransport::install(std::string &local_server_name,
 }
 
 int TcpTransport::allocateLocalSegmentID(int tcp_data_port) {
-    auto desc = std::make_shared<SegmentDesc>();
-    if (!desc) return ERR_MEMORY;
+    auto desc = metadata_->getSegmentDesc(local_server_name_);
+    if (!desc) desc = std::make_shared<SegmentDesc>();
     desc->name = local_server_name_;
     desc->protocol.push_back("tcp");
     desc->tcp_data_port = tcp_data_port;

@@ -83,15 +83,18 @@ int removeLocalSegment(transfer_engine_t engine, const char *segment_name) {
 }
 
 int registerLocalMemory(transfer_engine_t engine, void *addr, size_t length,
-                        const char *location, int remote_accessible) {
+                        const char *location, int remote_accessible, const char *proto) {
     TransferEngine *native = (TransferEngine *)engine;
-    return native->registerLocalMemory(addr, length, location,
-                                       remote_accessible, true);
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+    buffer_map[proto].emplace_back(addr, length, location, remote_accessible, true);
+    return native->registerLocalMemory(buffer_map);
 }
 
-int unregisterLocalMemory(transfer_engine_t engine, void *addr) {
+int unregisterLocalMemory(transfer_engine_t engine, void *addr, const char *proto) {
     TransferEngine *native = (TransferEngine *)engine;
-    return native->unregisterLocalMemory(addr);
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+    buffer_map[proto].emplace_back(addr);
+    return native->unregisterLocalMemory(buffer_map);
 }
 
 int registerLocalMemoryBatch(transfer_engine_t engine,

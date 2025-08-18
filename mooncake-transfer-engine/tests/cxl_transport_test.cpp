@@ -36,7 +36,7 @@ namespace mooncake {
 
 DEFINE_string(local_server_name, getHostname(),
               "Local server name for segment discovery");
-DEFINE_string(metadata_server, "10.130.5.131:2379", "etcd server host address");
+DEFINE_string(metadata_server, "10.129.131.15:2379", "etcd server host address");
 DEFINE_string(mode, "initiator",
               "Running mode: initiator or target. Initiator node read/write "
               "data blocks from target node");
@@ -71,6 +71,7 @@ class CXLTransportTest : public ::testing::Test {
     mooncake::Transport::SegmentID segment_id;
     std::shared_ptr<TransferMetadata::SegmentDesc> segment_desc;
     const size_t kDataLength = 4 * 1024;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
     
 
    protected:
@@ -105,13 +106,14 @@ class CXLTransportTest : public ::testing::Test {
         addr = (uint8_t*) allocateMemoryPool(kDataLength, 0, false);
         // DSA copy requires that memory has already undergone page faults
         memset(addr, 0, kDataLength);
-        int rc = engine->registerLocalMemory(base_addr + offset_1, len);
+        buffer_map[FLAGS_protocol].emplace_back(base_addr + offset_1, len);
+        int rc = engine->registerLocalMemory(buffer_map);
         ASSERT_EQ(rc, 0);
 
         segment_id = engine->openSegment(FLAGS_local_server_name.c_str());
         // bindToSocket(0);
         segment_desc = engine->getMetadata()->getSegmentDescByID(segment_id);
-
+        buffer_map.clear();
     }
 
     void TearDown() override {
@@ -233,7 +235,8 @@ TEST_F(CXLTransportTest, MultipleRead) {
 
         freeMemoryPool(src, kDataLength);
     }
-    engine->unregisterLocalMemory(addr);
+    buffer_map[FLAGS_protocol].emplace_back(addr);
+    engine->unregisterLocalMemory(buffer_map);
     
 }
 

@@ -144,8 +144,9 @@ int initiator() {
     }
 
     LOG(INFO) << "tmp_devAddr_target: " << tmp_devAddr << ", len: " << FLAGS_block_size;
-    ret = engine->registerLocalMemory(tmp_devAddr, FLAGS_block_size,
-                                        "npu:" + std::to_string(g_devicePhyId));
+
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+    buffer_map[FLAGS_protocol].emplace_back(tmp_devAddr, FLAGS_block_size, "npu:" + std::to_string(g_devicePhyId));
 
     void *devAddr = NULL;
     std::vector<void *> g_addr;
@@ -157,14 +158,14 @@ int initiator() {
             return -1;
         }
         LOG(INFO) << "dev_addr_initiator: " << devAddr << " len:" << FLAGS_batch_size * block_size * 2;
-        ret = engine->registerLocalMemory(devAddr, FLAGS_batch_size * block_size * 2,
-                                            "npu:" + std::to_string(g_devicePhyId));
-        if (ret) {
-            LOG(ERROR) << "Failed to registerLocalMemory, ret: " << ret;
-            return ret;
-        }
-
+        buffer_map[FLAGS_protocol].emplace_back(devAddr, FLAGS_batch_size * block_size * 2, "npu:" + std::to_string(g_devicePhyId));
         g_addr.push_back(devAddr);
+    }
+
+    ret = engine->registerLocalMemory(buffer_map);
+    if (ret) {
+        LOG(ERROR) << "Failed to registerLocalMemory, ret: " << ret;
+        return ret;
     }
 
     auto segment_id = engine->openSegment(FLAGS_segment_id.c_str());
@@ -300,8 +301,9 @@ int target() {
     }
 
     LOG(INFO) << "tmp_devAddr_target: " << tmp_devAddr << ", len: " << FLAGS_block_size;
-    ret = engine->registerLocalMemory(tmp_devAddr, FLAGS_block_size,
-                                        "npu:" + std::to_string(g_devicePhyId));
+
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+    buffer_map[FLAGS_protocol].emplace_back(tmp_devAddr, FLAGS_block_size, "npu:" + std::to_string(g_devicePhyId));
 
     void *devAddr = NULL;
     std::vector<void *> g_addr;
@@ -314,14 +316,13 @@ int target() {
         }
 
         LOG(INFO) << "devAddr_target: " << devAddr << ", len: " << FLAGS_batch_size * block_size * 2;
-        ret = engine->registerLocalMemory(devAddr, FLAGS_batch_size * block_size * 2,
-                                            "npu:" + std::to_string(g_devicePhyId));
-        if (ret) {
-            LOG(ERROR) << "Failed to registerLocalMemory, ret: " << ret;
-            return ret;
-        }
-
+        buffer_map[FLAGS_protocol].emplace_back(devAddr, FLAGS_batch_size * block_size * 2, "npu:" + std::to_string(g_devicePhyId));
         g_addr.push_back(devAddr);
+    }
+    ret = engine->registerLocalMemory(buffer_map);
+    if (ret) {
+        LOG(ERROR) << "Failed to registerLocalMemory, ret: " << ret;
+        return ret;
     }
 
     while (target_running) sleep(1);

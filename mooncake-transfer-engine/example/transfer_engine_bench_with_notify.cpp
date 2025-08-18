@@ -312,24 +312,25 @@ int initiator() {
 
     std::vector<void *> addr(NR_SOCKETS, nullptr);
     int buffer_num = NR_SOCKETS;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
 #ifdef USE_CUDA
     if (FLAGS_use_vram) LOG(INFO) << "VRAM is used";
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, FLAGS_use_vram);
         std::string name_prefix = FLAGS_use_vram ? "cuda:" : "cpu:";
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             name_prefix + std::to_string(i));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, name_prefix + std::to_string(i));
     }
 #else
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             "cpu:" + std::to_string(i));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cpu:" + std::to_string(i));
     }
 #endif
+
+    int rc = engine->registerLocalMemory(buffer_map);
+    LOG_ASSERT(!rc);
+    buffer_map.clear();
 
     auto segment_id = engine->openSegment(FLAGS_segment_id.c_str());
 
@@ -363,9 +364,10 @@ int initiator() {
                      duration);
 
     for (int i = 0; i < buffer_num; ++i) {
-        engine->unregisterLocalMemory(addr[i]);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i]);
         freeMemoryPool(addr[i], FLAGS_buffer_size);
     }
+    engine->unregisterLocalMemory(buffer_map);
 
     return 0;
 }
@@ -406,24 +408,25 @@ int target() {
 
     std::vector<void *> addr(NR_SOCKETS, nullptr);
     int buffer_num = NR_SOCKETS;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
 #ifdef USE_CUDA
     if (FLAGS_use_vram) LOG(INFO) << "VRAM is used";
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, FLAGS_use_vram);
         std::string name_prefix = FLAGS_use_vram ? "cuda:" : "cpu:";
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             name_prefix + std::to_string(i));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, name_prefix + std::to_string(i));
     }
 #else
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
-        int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
-                                             "cpu:" + std::to_string(i));
-        LOG_ASSERT(!rc);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cpu:" + std::to_string(i));
     }
 #endif
+
+    int rc = engine->registerLocalMemory(buffer_map);
+    LOG_ASSERT(!rc);
+    buffer_map.clear();
 
     LOG(INFO) << "numa node num: " << NR_SOCKETS;
 
@@ -437,13 +440,14 @@ int target() {
         notifies.clear();
     }
     for (int i = 0; i < buffer_num; ++i) {
-        engine->unregisterLocalMemory(addr[i]);
+        buffer_map[FLAGS_protocol].emplace_back(addr[i]);
 #ifdef USE_NVLINK
         mooncake::NvlinkTransport::freePinnedLocalMemory(addr[i]);
 #else
         freeMemoryPool(addr[i], FLAGS_buffer_size);
 #endif
     }
+    engine->unregisterLocalMemory(buffer_map);
 
     return 0;
 }

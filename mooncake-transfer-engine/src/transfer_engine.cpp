@@ -141,6 +141,7 @@ int TransferEngine::init(const std::string &metadata_conn_string,
         LOG(ERROR) << "Failed to install CXL transport";
         return -1;
     }
+    LOG(INFO) << "CXL transport installed";
 #endif
 
     if (auto_discover_) {
@@ -185,12 +186,14 @@ int TransferEngine::init(const std::string &metadata_conn_string,
                 LOG(ERROR) << "Failed to install RDMA transport";
                 return -1;
             }
+            LOG(INFO) << "RDMA transport installed";
         } else {
             Transport* tcp_transport = multi_transports_->installTransport("tcp", nullptr);
             if (!tcp_transport) {
                 LOG(ERROR) << "Failed to install TCP transport";
                 return -1;
             }
+            LOG(INFO) << "TCP transport installed";
         }
 #endif
         // TODO: install other transports automatically
@@ -303,43 +306,98 @@ bool TransferEngine::checkOverlap(void *addr, uint64_t length) {
     return false;
 }
 
-int TransferEngine::registerLocalMemory(void *addr, size_t length,
-                                        const std::string &location,
-                                        bool remote_accessible,
-                                        bool update_metadata) {
-    if (checkOverlap(addr, length)) {
-        LOG(ERROR)
-            << "Transfer Engine does not support overlapped memory region";
-        return ERR_ADDRESS_OVERLAPPED;
-    }
-    for (auto transport : multi_transports_->listTransports()) {
-        int ret = transport->registerLocalMemory(
-            addr, length, location, remote_accessible, update_metadata);
-        if (ret < 0) {
-            LOG(ERROR) << "Error transport: " << transport->getName();
-            return ret;
+int TransferEngine::registerLocalMemory(std::unordered_map<std::string, 
+                                            std::vector<RegisteredBuffer>> 
+                                            &buffer_map) {
+    /* check if there is any overlap */
+    for (const auto &buffer_entry : buffer_map) {
+        LOG(INFO) << "Buffer proto: " << buffer_entry.first << "[";
+        for (const auto &buffer : buffer_entry.second) {
+            LOG(INFO) << "(addr: " << buffer.addr << ", length: " << buffer.length << ")";
+            if (checkOverlap(buffer.addr, buffer.length)) {
+                LOG(ERROR)
+                    << "Transfer Engine does not support overlapped memory region";
+                return ERR_ADDRESS_OVERLAPPED;
+            } 
         }
+        LOG(INFO) << "]";
     }
 
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    local_memory_regions_.push_back(
-        {addr, length, location, remote_accessible});
+    /* register memory region */
+    std::vector<MemoryRegion> registered_buffers;
+    for (const auto &buffer_entry : buffer_map) {
+        const std::string &protocal = buffer_entry.first;
+        const std::vector<RegisteredBuffer> &buffer_list = buffer_entry.second;
+
+        auto transport = multi_transports_->getTransport(protocal);
+        if (!transport) {
+            LOG(ERROR) << "Transport " << protocal << " not found";
+            return -1;
+        }
+
+        for (const auto &buffer : buffer_list) {
+            int ret = transport->registerLocalMemory(
+                buffer.addr, buffer.length, buffer.location,
+                buffer.remote_accessible, buffer.update_metadata);
+            if (ret < 0) {
+                LOG(ERROR) << "RegisterLocalMemory failed, transport: " 
+                           << transport->getName() << " buffer: " 
+                           << buffer.addr << " length: " << buffer.length ;
+                break;
+            }
+            registered_buffers.push_back(
+                {buffer.addr, buffer.length, buffer.location, buffer.remote_accessible}
+            );
+        }
+
+        if (registered_buffers.size() != buffer_list.size()) {
+            for (auto &buffer : registered_buffers) {
+                transport->unregisterLocalMemory(buffer.addr, true);
+            }
+        } else {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            local_memory_regions_.insert(
+                local_memory_regions_.end(), registered_buffers.begin(),
+                registered_buffers.end());
+        }
+
+        registered_buffers.clear();
+    }
     return 0;
 }
 
-int TransferEngine::unregisterLocalMemory(void *addr, bool update_metadata) {
-    for (auto &transport : multi_transports_->listTransports()) {
-        int ret = transport->unregisterLocalMemory(addr, update_metadata);
-        if (ret) return ret;
-    }
+int TransferEngine::unregisterLocalMemory(std::unordered_map<std::string, 
+                                                std::vector<RegisteredBuffer>> 
+                                                &buffer_map) {
+    for (const auto &buffer_entry : buffer_map) {
+        const std::string &protocal = buffer_entry.first;
+        const std::vector<RegisteredBuffer> &buffer_list = buffer_entry.second;
 
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    for (auto it = local_memory_regions_.begin();
-         it != local_memory_regions_.end(); ++it) {
-        if (it->addr == addr) {
-            local_memory_regions_.erase(it);
-            break;
+        auto transport = multi_transports_->getTransport(protocal);
+        if (!transport) {
+            LOG(ERROR) << "Transport " << protocal << " not found";
+            return -1;
         }
+
+        std::vector<void *> unregisted_buffer_addrs;
+        for (const auto &buffer : buffer_list) {
+            int ret = transport->unregisterLocalMemory(buffer.addr, buffer.update_metadata);
+            if (ret) {
+                unregisted_buffer_addrs.push_back(buffer.addr);
+            }
+        }
+
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        for (auto &buffer : unregisted_buffer_addrs) {
+            for (auto it = local_memory_regions_.begin();
+                 it != local_memory_regions_.end(); ++it) {
+                if (it->addr == buffer) {
+                    local_memory_regions_.erase(it);
+                    break;
+                }
+            }
+        }
+        unregisted_buffer_addrs.clear();
     }
     return 0;
 }

@@ -39,6 +39,7 @@ class RDMALoopbackTest : public ::testing::Test {
     std::pair<std::string, uint16_t> hostname_port;
     std::unique_ptr<mooncake::TransferEngine> engine;
     const size_t ram_buffer_size = 1ull << 30;
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
    protected:
     void SetUp() override {
@@ -47,13 +48,16 @@ class RDMALoopbackTest : public ::testing::Test {
         engine = std::make_unique<TransferEngine>(true);
         engine->init(FLAGS_metadata_server, "test_node");
         addr = numa_alloc_onnode(ram_buffer_size, 0);
-        int rc = engine->registerLocalMemory(addr, ram_buffer_size, "cpu:0");
+        buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, "cpu:0");
+        int rc = engine->registerLocalMemory(buffer_map);
         ASSERT_EQ(rc, 0);
+        buffer_map.clear();
     }
 
     void TearDown() override {
         google::ShutdownGoogleLogging();
-        engine->unregisterLocalMemory(addr);
+        buffer_map[FLAGS_protocol].emplace_back(addr);
+        engine->unregisterLocalMemory(buffer_map);
         numa_free(addr, ram_buffer_size);
     }
 };

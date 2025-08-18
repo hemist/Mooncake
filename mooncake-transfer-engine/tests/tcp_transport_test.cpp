@@ -117,9 +117,11 @@ TEST_F(TCPTransportTest, Writetest) {
     Transport *xport = nullptr;
     xport = engine->installTransport("tcp", nullptr);
     LOG_ASSERT(xport != nullptr);
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
     addr = allocateMemoryPool(ram_buffer_size, 0, false);
-    rc = engine->registerLocalMemory(addr, ram_buffer_size, "cpu:0");
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, "cpu:0");
+    rc = engine->registerLocalMemory(buffer_map);
     LOG_ASSERT(!rc);
 
     for (size_t offset = 0; offset < kDataLength; ++offset)
@@ -161,9 +163,11 @@ TEST_F(TCPTransportTest, WriteAndReadtest) {
     Transport *xport = nullptr;
     xport = engine->installTransport("tcp", nullptr);
     LOG_ASSERT(xport != nullptr);
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
     addr = allocateMemoryPool(ram_buffer_size, 0, false);
-    int rc = engine->registerLocalMemory(addr, ram_buffer_size, "cpu:0");
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, "cpu:0");
+    int rc = engine->registerLocalMemory(buffer_map);
     LOG_ASSERT(!rc);
     for (size_t offset = 0; offset < kDataLength; ++offset)
         *((char *)(addr) + offset) = 'a' + lrand48() % 26;
@@ -233,9 +237,11 @@ TEST_F(TCPTransportTest, WriteAndRead2test) {
     Transport *xport = nullptr;
     xport = engine->installTransport("tcp", nullptr);
     LOG_ASSERT(xport != nullptr);
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
 
     addr = allocateMemoryPool(ram_buffer_size, 0, false);
-    int rc = engine->registerLocalMemory(addr, ram_buffer_size, "cpu:0");
+    buffer_map[FLAGS_protocol].emplace_back(addr, ram_buffer_size, "cpu:0");
+    int rc = engine->registerLocalMemory(buffer_map);
     LOG_ASSERT(!rc);
     for (size_t offset = 0; offset < kDataLength; ++offset)
         *((char *)(addr) + offset) = 'a' + lrand48() % 26;

@@ -49,8 +49,11 @@ TEST(NvlinkTransportTest, WriteAndRead) {
     ASSERT_NE(server_transport, nullptr);
 
     void* server_buffer = allocateCudaBuffer(kDataLength * 2, gpu_id);
-    int rc = server_engine->registerLocalMemory(server_buffer, kDataLength * 2, "cuda:0");
+    std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
+    buffer_map[FLAGS_protocol].emplace_back(server_buffer, kDataLength * 2, "cuda:0");
+    int rc = server_engine->registerLocalMemory(buffer_map);
     ASSERT_EQ(rc, 0);
+    buffer_map.clear();
 
     auto segment_id = server_engine->openSegment(FLAGS_segment_id);
 
@@ -63,9 +66,10 @@ TEST(NvlinkTransportTest, WriteAndRead) {
     ASSERT_NE(client_transport, nullptr);
 
     void* client_buffer = allocateCudaBuffer(kDataLength * 2, gpu_id);
-    rc = client_engine->registerLocalMemory(client_buffer, kDataLength * 2,
-                                            "cuda:" + std::to_string(gpu_id));
+    buffer_map[FLAGS_protocol].emplace_back(client_buffer, kDataLength * 2, "cuda:" + std::to_string(gpu_id));
+    rc = client_engine->registerLocalMemory(buffer_map);
     ASSERT_EQ(rc, 0);
+    buffer_map.clear();
 
     // Write: client -> server
     {
@@ -127,10 +131,14 @@ TEST(NvlinkTransportTest, WriteAndRead) {
     }
 
     // Cleanup
-    client_engine->unregisterLocalMemory(client_buffer);
+    buffer_map[FLAGS_protocol].emplace_back(client_buffer);
+    client_engine->unregisterLocalMemory(buffer_map);
     freeCudaBuffer(client_buffer);
-    server_engine->unregisterLocalMemory(server_buffer);
+    buffer_map.clear();
+    buffer_map[FLAGS_protocol].emplace_back(server_buffer);
+    server_engine->unregisterLocalMemory(buffer_map);
     freeCudaBuffer(server_buffer);
+    buffer_map.clear();
 }
 
 int main(int argc, char** argv) {
