@@ -30,13 +30,17 @@
 #include "transport/cxl_transport/cxl_transport.h"
 #include "common.h"
 
+#ifdef USE_CXL_CUDA
+#include <cuda_runtime.h>
+#endif
+
 using namespace mooncake;
 
 namespace mooncake {
 
 DEFINE_string(local_server_name, getHostname(),
               "Local server name for segment discovery");
-DEFINE_string(metadata_server, "10.130.5.131:2379", "etcd server host address");
+DEFINE_string(metadata_server, "10.129.131.15:2379", "etcd server host address");
 DEFINE_string(mode, "initiator",
               "Running mode: initiator or target. Initiator node read/write "
               "data blocks from target node");
@@ -65,13 +69,18 @@ class CXLTransportTest : public ::testing::Test {
     std::unique_ptr<mooncake::TransferEngine> engine;
     const size_t offset_1 = 2 * 1024 * 1024;
     const size_t offset_2 = 6 * 1024 * 1024;
-    const size_t len = 2 * 1024 * 1024;
+    const size_t len = 50 * 1024 * 1024;
     CxlTransport *cxl_xport;
     Transport *xport;
     void **args;
     mooncake::Transport::SegmentID segment_id;
     std::shared_ptr<TransferMetadata::SegmentDesc> segment_desc;
-    const size_t kDataLength = 4 * 1024;
+    const size_t kDataLength = 4 * 1024 * 1024;
+#ifdef USE_CXL_CUDA
+    cudaError_t cuda_status;
+    uint8_t *cu_addr = nullptr;
+    const size_t offset_3 = 12 * 1024 * 1024;
+#endif
     
 
    protected:
@@ -109,7 +118,17 @@ class CXLTransportTest : public ::testing::Test {
         memset(addr, 0, kDataLength);
         int rc = engine->registerLocalMemory(base_addr + offset_1, len);
         ASSERT_EQ(rc, 0);
-
+#ifdef USE_CXL_CUDA
+        cuda_status = cudaMalloc((void**)&cu_addr, kDataLength);
+        if (cuda_status != cudaSuccess) {
+            fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(cuda_status));
+        }
+        cuda_status = cudaMemset(cu_addr, 0, kDataLength);
+            if (cuda_status != cudaSuccess) {
+            fprintf(stderr, "cudaMemset failed: %s\n", cudaGetErrorString(cuda_status));
+            cudaFree(cu_addr);
+        }
+#endif
         segment_id = engine->openSegment(FLAGS_local_server_name.c_str());
         // bindToSocket(0);
         segment_desc = engine->getMetadata()->getSegmentDescByID(segment_id);
@@ -162,6 +181,7 @@ TEST_F(CXLTransportTest, MultiWrite) {
 }
 
 TEST_F(CXLTransportTest, MultipleRead) {
+    LOG(INFO) << "Start write before read.";
     int times = 10;
     while (times--) {
         for (size_t offset = 0; offset < kDataLength; ++offset)
@@ -169,7 +189,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
         auto batch_id = xport->allocateBatchID(1);
         Status s;
         TransferRequest entry;
-        entry.opcode = TransferRequest::READ;
+        entry.opcode = TransferRequest::WRITE;
         entry.length = kDataLength;
         entry.source = (uint8_t *)(addr);
         entry.target_id = segment_id;
@@ -196,7 +216,7 @@ TEST_F(CXLTransportTest, MultipleRead) {
     }
 
     // sleep(10);
-
+    LOG(INFO) << "Write over, start read.";
     times = 10;
     while (times--) {
         auto batch_id = xport->allocateBatchID(1);
@@ -235,9 +255,91 @@ TEST_F(CXLTransportTest, MultipleRead) {
 
         freeMemoryPool(src, kDataLength);
     }
-    engine->unregisterLocalMemory(addr);
-    
 }
+
+#ifdef USE_CXL_CUDA
+TEST_F(CXLTransportTest, MultipleWriteThenReadCuda) {
+    LOG(INFO) << "Start write before read.";
+    int times = 10;
+    while (times--) {
+        for (size_t offset = 0; offset < kDataLength; ++offset)
+            *((char *)(addr) + offset) = 'a' + lrand48() % 26;
+        cuda_status = cudaMemcpy(cu_addr, addr, kDataLength, cudaMemcpyHostToDevice);
+        if (cuda_status != cudaSuccess) {
+            fprintf(stderr, "Init cuda memory failed: %s\n", cudaGetErrorString(cuda_status));
+        }
+
+        auto batch_id = xport->allocateBatchID(1);
+        Status s;
+        TransferRequest entry;
+        entry.opcode = TransferRequest::WRITE;
+        entry.length = kDataLength;
+        entry.source = (uint8_t *)(cu_addr);
+        entry.target_id = segment_id;
+        entry.target_offset = offset_3;
+        // s = xport->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry});
+        LOG_ASSERT(s.ok());
+        
+        bool completed = false;
+        TransferStatus status;
+        while (!completed) {
+            Status s = xport->getTransferStatus(batch_id, 0, status);
+            ASSERT_EQ(s, Status::OK());
+            if (status.s == TransferStatusEnum::COMPLETED)
+                completed = true;
+            else if (status.s == TransferStatusEnum::FAILED) {
+                LOG(INFO) << "FAILED";
+                completed = true;
+            }
+        }
+        
+        s = xport->freeBatchID(batch_id);
+        ASSERT_EQ(s, Status::OK());
+    }
+
+    // sleep(10);
+    LOG(INFO) << "Write over, start read.";
+    times = 10;
+    while (times--) {
+        auto batch_id = xport->allocateBatchID(1);
+        int ret = 0;
+
+        TransferRequest entry;
+        entry.opcode = TransferRequest::READ;
+        entry.length = kDataLength;
+        entry.source = (uint8_t *)(cu_addr);
+        entry.target_id = segment_id;
+        entry.target_offset = offset_3;
+        Status s;
+        // s = xport->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry});
+        ASSERT_EQ(s, Status::OK());
+
+        bool completed = false;
+        TransferStatus status;
+        while (!completed) {
+            Status s = xport->getTransferStatus(batch_id, 0, status);
+            ASSERT_EQ(s, Status::OK());
+            if (status.s == TransferStatusEnum::COMPLETED)
+                completed = true;
+            else if (status.s == TransferStatusEnum::FAILED) {
+                completed = true;
+            }
+        }
+
+        s = xport->freeBatchID(batch_id);
+        ASSERT_EQ(s, Status::OK());
+        memset(addr, 0, kDataLength);
+        cuda_status = cudaMemcpy(addr, cu_addr, kDataLength, cudaMemcpyDeviceToHost);
+        if (cuda_status != cudaSuccess) {
+            fprintf(stderr, "Init cuda memory failed: %s\n", cudaGetErrorString(cuda_status));
+        }
+        ret = memcmp((uint8_t *)(base_addr + offset_3), (uint8_t *)(addr), kDataLength);
+        ASSERT_EQ(ret, 0);
+    }
+}
+#endif
 
 }  // namespace mooncake
 

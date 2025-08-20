@@ -17,6 +17,10 @@ target_link_libraries(rdma_loopback_test PUBLIC transfer_engine gtest gtest_main
 if (USE_CXL)
     add_executable(cxl_transport_test cxl_transport_test.cpp)
     target_link_libraries(cxl_transport_test PUBLIC transfer_engine gtest gtest_main )
+    if (USE_CXL_CUDA)
+        target_include_directories(transport PUBLIC /usr/local/cuda/include)
+        target_link_libraries(transport PUBLIC cuda cudart rt)
+    endif()
     add_test(NAME cxl_transport_test COMMAND cxl_transport_test)
 endif()
 
