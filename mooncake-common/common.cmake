@@ -61,6 +61,7 @@ option(USE_TCP "option for using TCP transport" ON)
 option(USE_ASCEND "option for using npu" OFF)
 option(USE_MNNVL "option for using Multi-Node NVLink transport" OFF)
 option(USE_CXL "option for using CXL protocol" ON)
+option(USE_CXL_CUDA "option for enabling CXL to VRAM transport by CUDA" OFF)
 option(USE_ETCD "option for enable etcd as metadata server" OFF)
 option(USE_ETCD_LEGACY "option for enable etcd based on etcd-cpp-api-v3" OFF)
 option(USE_REDIS "option for enable redis as metadata server" OFF)
@@ -94,6 +95,17 @@ endif()
 if (USE_CUDA)
   add_compile_definitions(USE_CUDA)
   message(STATUS "CUDA support is enabled")
+  include_directories(/usr/local/cuda/include)
+  link_directories(
+    /usr/local/cuda/lib
+    /usr/local/cuda/lib64
+  )
+endif()
+
+if (USE_CXL_CUDA)
+  set(USE_CXL ON)
+  add_compile_definitions(USE_CXL_CUDA)
+  message(STATUS "CXL_CUDA support is enabled")
   include_directories(/usr/local/cuda/include)
   link_directories(
     /usr/local/cuda/lib
