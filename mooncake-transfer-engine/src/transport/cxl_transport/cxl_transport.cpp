@@ -34,6 +34,42 @@
 #include <sys/mman.h> // For mmap, munmap
 #include <dml/dml.hpp>
 
+#ifdef USE_CXL_CUDA
+#include <cuda_runtime.h>
+#define CUDA_CHECK(call) \
+    do { \
+        cudaError_t err = call; \
+        if (err != cudaSuccess) { \
+            fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+            exit(1); \
+        } \
+    } while(0)
+
+bool isCudaAddress(void* ptr) {
+    if (ptr == nullptr) {
+        return false;
+    }
+
+    cudaPointerAttributes attributes;
+    cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+    if (err != cudaSuccess) {
+        return false;
+    }
+    
+    // 根据CUDA版本使用适当的判断方法
+    #if CUDA_VERSION >= 11000
+    // CUDA 11.0及以上版本
+    // 检查是否为设备指针且不是统一内存(managed memory)
+    return (attributes.devicePointer != nullptr) && !attributes.isManaged;
+    #else
+    // 旧版CUDA (10.x及以下)
+    // 检查内存类型是否为设备内存（排除统一内存）
+    return (attributes.type == cudaMemoryTypeDevice);
+    #endif
+}
+
+#endif
+
 namespace mooncake {
 
 CxlTransport::CxlTransport() {
@@ -51,6 +87,9 @@ CxlTransport::CxlTransport() {
 }
 
 CxlTransport::~CxlTransport() {
+#ifdef USE_CXL_CUDA
+    CUDA_CHECK(cudaHostUnregister(cxl_base_addr));
+#endif
     munmap(cxl_base_addr, cxl_dev_size);
     metadata_->removeSegmentDesc(local_server_name_);
 }
@@ -128,8 +167,28 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     if (!validateMemoryBounds(dest, src, size)) {
         return -1; // validation failed
     }
-    
-    
+
+#ifdef USE_CXL_CUDA
+    if (isAddressInCxlRange(dest) && isCudaAddress(src)) {
+        // dest is CXL, src is VRAM, Opcode is TransferRequest::READ, VRAM->CXL
+        // cudaHostRegister is finished in cxlDevInit()
+        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
+        // LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        return 0;
+    } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
+        // dest is VRAM, src is CXL, Opcode is TransferRequest::WRITE, CXL->VRAM
+        // cudaHostRegister is finished in cxlDevInit()
+        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
+        // LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        return 0;
+    } else {
+        LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM.";
+    }
+#endif
     // Perform the memory copy
     if (size < 32768)
         std::memcpy(dest, src, size);
@@ -145,7 +204,7 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
         // Ensure memory ordering for CXL operations
         __sync_synchronize();
     }
-    
+
     return 0; // success
 }
 
@@ -202,6 +261,15 @@ int CxlTransport::cxlDevInit()
     // LOG(INFO) << "Memset dsa base addrs";
     cxl_base_addr = ptr;
     close(fd);
+
+#ifdef USE_CXL_CUDA
+    cudaError_t reg_err = cudaHostRegister(cxl_base_addr, cxl_dev_size, cudaHostRegisterDefault);
+    if (reg_err != cudaSuccess) {
+        LOG(ERROR) << "CxlTransport: Cannot register CXL memory to CUDA." << strerror(errno);
+        return -1;
+    }
+#endif
+
     return 0;
 }
 
