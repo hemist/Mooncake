@@ -347,7 +347,7 @@ class DistributedObjectStore {
     };
 
     std::vector<std::unique_ptr<void, SegmentDeleter>> segment_ptrs_;
-    std::string protocol;
+    std::vector<std::string> protocols;
     std::string device_name;
     std::string local_hostname;
 };

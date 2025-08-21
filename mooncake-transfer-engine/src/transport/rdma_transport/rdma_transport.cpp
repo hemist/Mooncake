@@ -108,14 +108,14 @@ int RdmaTransport::registerLocalMemory(void *addr, size_t length,
         buffer_desc.name = entries[0].location;
         buffer_desc.addr = (uint64_t)addr;
         buffer_desc.length = length;
-        buffer_desc.protocal = "rdma";
+        buffer_desc.protocol = "rdma";
         int rc = metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
         if (rc) return rc;
     } else {
         buffer_desc.name = name;
         buffer_desc.addr = (uint64_t)addr;
         buffer_desc.length = length;
-        buffer_desc.protocal = "rdma";
+        buffer_desc.protocol = "rdma";
         int rc = metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
 
         if (rc) return rc;

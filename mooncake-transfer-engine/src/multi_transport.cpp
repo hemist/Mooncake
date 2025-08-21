@@ -255,6 +255,16 @@ Transport *MultiTransport::getTransport(const std::string &proto) {
     return transport_map_[proto].get();
 }
 
+int MultiTransport::checkTransports(const std::vector<std::string> &protos) {
+    for (auto &proto : protos) {
+        if (!transport_map_.count(proto)) {
+            LOG(ERROR) << "Transport " << proto << " not installed";
+            return -1;
+        }
+    }
+    return 0;
+}
+
 std::vector<Transport *> MultiTransport::listTransports() {
     std::vector<Transport *> transport_list;
     for (auto &entry : transport_map_) {

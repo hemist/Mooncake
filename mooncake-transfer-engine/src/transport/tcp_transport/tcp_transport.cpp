@@ -274,7 +274,7 @@ int TcpTransport::registerLocalMemory(void *addr, size_t length,
     buffer_desc.name = local_server_name_;
     buffer_desc.addr = (uint64_t)addr;
     buffer_desc.length = length;
-    buffer_desc.protocal = "tcp";
+    buffer_desc.protocol = "tcp";
     return metadata_->addLocalMemoryBuffer(buffer_desc, update_metadata);
 }
 

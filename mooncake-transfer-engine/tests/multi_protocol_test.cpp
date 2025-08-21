@@ -50,14 +50,14 @@ static void freeMemoryPool(void *addr, size_t size) {
     numa_free(addr, size); 
 }
 
-class MultiProtocalTest : public ::testing::Test {
+class MultiProtocolTest : public ::testing::Test {
    public:
     const size_t offset_1 = 2 * 1024 * 1024;
     const size_t offset_2 = 6 * 1024 * 1024;
     const size_t len = 2 * 1024 * 1024;
     const size_t kDataLength = 4 * 1024;
     int tmp_fd = -1;
-    std::vector<std::string> protocals;
+    std::vector<std::string> protocols;
     uint8_t *addr = nullptr;
     uint8_t *base_addr;
     uint8_t *buffer_addr;
@@ -71,7 +71,7 @@ class MultiProtocalTest : public ::testing::Test {
    protected:
     void SetUp() override {
         static int offset = 0;
-        google::InitGoogleLogging("MultiProtocalTransportTest");
+        google::InitGoogleLogging("MultiProtocolTransportTest");
         FLAGS_logtostderr = 1;
 
         // Set device name from gflags parameter
@@ -83,7 +83,7 @@ class MultiProtocalTest : public ::testing::Test {
         std::string item;
         while (std::getline(ss, item, ',')) {
             if (!item.empty()) {
-                protocals.push_back(item);
+                protocols.push_back(item);
             }
         }
 
@@ -102,7 +102,7 @@ class MultiProtocalTest : public ::testing::Test {
         memset(addr, 0, kDataLength);
 
         // register local memory for target data
-        for (const auto &protocol : protocals) {
+        for (const auto &protocol : protocols) {
             if (protocol == "cxl") {
                 base_addr = (uint8_t*)engine->getBaseAddr();
                 buffer_map[protocol].emplace_back(base_addr + offset_1, len);
@@ -130,14 +130,14 @@ class MultiProtocalTest : public ::testing::Test {
     }
 };
 
-TEST_F(MultiProtocalTest, MultiWrite) {
+TEST_F(MultiProtocolTest, MultiWrite) {
     int times = 10;
     while (times--) {
         for (size_t offset = 0; offset < kDataLength; ++offset)
             *((char *)(addr) + offset) = 'a' + lrand48() % 26;
         
         auto batch_id = engine->allocateBatchID(1);
-        auto proto = protocals[times % protocals.size()];
+        auto proto = protocols[times % protocols.size()];
 
         Status s;
         TransferRequest entry;
@@ -169,7 +169,7 @@ TEST_F(MultiProtocalTest, MultiWrite) {
     }
 }
 
-TEST_F(MultiProtocalTest, MultipleRead) {
+TEST_F(MultiProtocolTest, MultipleRead) {
     int times = 10;
 
     while (times--) {
@@ -180,7 +180,7 @@ TEST_F(MultiProtocalTest, MultipleRead) {
         for (size_t offset = 0; offset < kDataLength; ++offset)
             *((data) + offset) = 'a' + lrand48() % 26;
         
-        auto proto = protocals[times % protocals.size()];
+        auto proto = protocols[times % protocols.size()];
 
         Status s;
         TransferStatus status;

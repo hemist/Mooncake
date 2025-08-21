@@ -105,6 +105,10 @@ class TransferEngine {
         return multi_transports_->getTransport(proto);
     }
 
+    int checkTransports(const std::vector<std::string> &proto_list) {
+        return multi_transports_->checkTransports(proto_list);
+    }
+
     // Only for testing.
     Transport *installTransport(const std::string &proto, void **args);
 

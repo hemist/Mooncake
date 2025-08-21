@@ -326,12 +326,12 @@ int TransferEngine::registerLocalMemory(std::unordered_map<std::string,
     /* register memory region */
     std::vector<MemoryRegion> registered_buffers;
     for (const auto &buffer_entry : buffer_map) {
-        const std::string &protocal = buffer_entry.first;
+        const std::string &protocol = buffer_entry.first;
         const std::vector<RegisteredBuffer> &buffer_list = buffer_entry.second;
 
-        auto transport = multi_transports_->getTransport(protocal);
+        auto transport = multi_transports_->getTransport(protocol);
         if (!transport) {
-            LOG(ERROR) << "Transport " << protocal << " not found";
+            LOG(ERROR) << "Transport " << protocol << " not found";
             return -1;
         }
 
@@ -370,12 +370,12 @@ int TransferEngine::unregisterLocalMemory(std::unordered_map<std::string,
                                                 std::vector<RegisteredBuffer>> 
                                                 &buffer_map) {
     for (const auto &buffer_entry : buffer_map) {
-        const std::string &protocal = buffer_entry.first;
+        const std::string &protocol = buffer_entry.first;
         const std::vector<RegisteredBuffer> &buffer_list = buffer_entry.second;
 
-        auto transport = multi_transports_->getTransport(protocal);
+        auto transport = multi_transports_->getTransport(protocol);
         if (!transport) {
-            LOG(ERROR) << "Transport " << protocal << " not found";
+            LOG(ERROR) << "Transport " << protocol << " not found";
             return -1;
         }
 

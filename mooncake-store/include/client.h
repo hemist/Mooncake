@@ -34,7 +34,7 @@ class Client {
      * @brief Creates and initializes a new Client instance
      * @param local_hostname Local host address (IP:Port)
      * @param metadata_connstring Connection string for metadata service
-     * @param protocol Transfer protocol ("rdma" or "tcp")
+     * @param protocols Transfer protocols (["rdma" or "tcp", "cxl"])
      * @param protocol_args Protocol-specific arguments
      * @param master_server_entry The entry of master server (IP:Port of master
      *        address for non-HA mode, etcd://IP:Port;IP:Port;...;IP:Port for
@@ -44,7 +44,8 @@ class Client {
      */
     static std::optional<std::shared_ptr<Client>> Create(
         const std::string& local_hostname,
-        const std::string& metadata_connstring, const std::string& protocol,
+        const std::string& metadata_connstring, 
+        const std::vector<std::string>& protocols,
         void** protocol_args,
         const std::string& master_server_entry = kDefaultMasterAddress);
 
@@ -149,7 +150,8 @@ class Client {
      * @param size Size of the buffer in bytes
      * @return ErrorCode indicating success/failure
      */
-    tl::expected<void, ErrorCode> MountSegment(const void* buffer, size_t size, bool is_cxl = false);
+    tl::expected<void, ErrorCode> MountSegment(const void* buffer, size_t size, 
+                                               StorageLevel level = StorageLevel::RAM);
 
     /**
      * @brief Unregisters a memory segment from master
@@ -200,10 +202,14 @@ class Client {
         const std::vector<std::string>& keys);
 
     /**
-     * @brief Get global segment base address for cxl protocal
+     * @brief Get global segment base address for cxl protocol
      * @return Global segment base address
      */
     void *GetBaseAddr();
+
+    std::unordered_map<StorageLevel, std::string> GetLevelProtocols() {
+        return level_protocols_;
+    }
 
    private:
     /**
@@ -219,7 +225,7 @@ class Client {
     ErrorCode ConnectToMaster(const std::string& master_server_entry);
     ErrorCode InitTransferEngine(const std::string& local_hostname,
                                  const std::string& metadata_connstring,
-                                 const std::string& protocol,
+                                 const std::vector<std::string>& protocols,
                                  void** protocol_args);
     ErrorCode TransferData(const Replica::Descriptor& replica,
                            std::vector<Slice>& slices,
@@ -261,6 +267,9 @@ class Client {
     void WaitForTransfers(std::vector<PutOperation>& ops);
     void FinalizeBatchPut(std::vector<PutOperation>& ops);
     void BatchPuttoLocalFile(std::vector<PutOperation>& ops);
+
+    void DispatchProtocols(const std::vector<std::string> &protocols);
+
     std::vector<tl::expected<void, ErrorCode>> CollectResults(
         const std::vector<PutOperation>& ops);
 
@@ -290,6 +299,9 @@ class Client {
 
     // Client identification
     UUID client_id_;
+
+    // Store Level
+    std::unordered_map<StorageLevel, std::string> level_protocols_;
 };
 
 }  // namespace mooncake

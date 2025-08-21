@@ -445,7 +445,7 @@ int HcclTransport::registerLocalMemory(void *addr, size_t length,
     buffer_desc.name = location;
     buffer_desc.addr = (uint64_t)addr;
     buffer_desc.length = (uint64_t)length;
-    buffer_desc.protocal = "ascend";
+    buffer_desc.protocol = "ascend";
 
     int ret;
     ret = regLocalRmaMem(addr, (uint64_t)length);

@@ -14,7 +14,7 @@ add_executable(rdma_loopback_test rdma_loopback_test.cpp)
 target_link_libraries(rdma_loopback_test PUBLIC transfer_engine gtest gtest_main )
 # add_test(NAME rdma_loopback_test COMMAND rdma_loopback_test)
 
-add_executable(multi_protocol_test multi_protocal_test.cpp)
+add_executable(multi_protocol_test multi_protocol_test.cpp)
 target_link_libraries(multi_protocol_test PUBLIC transfer_engine gtest gtest_main)
 add_test(NAME multi_protocol_test COMMAND multi_protocol_test)
 

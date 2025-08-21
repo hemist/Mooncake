@@ -139,6 +139,9 @@ enum class ErrorCode : int32_t {
     FILE_INVALID_BUFFER = -1104,  ///< File buffer is wrong.
     FILE_LOCK_FAIL = -1105,       ///< File lock operation failed.
     FILE_INVALID_HANDLE = -1106,  ///< Invalid file handle.
+
+    // Protocol errors (Range: -1200 to -1299)
+    PROTOCOL_ERROR = -1200,
 };
 
 int32_t toInt(ErrorCode errorCode) noexcept;
@@ -233,6 +236,8 @@ enum class StorageLevel {
     RAM = 0,
     CXL,
     SSD,
+
+    NUM_STORAGE_LEVELS
 };
 
 /**

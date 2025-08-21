@@ -52,6 +52,8 @@ class MultiTransport {
 
     Transport *getTransport(const std::string &proto);
 
+    int checkTransports(const std::vector<std::string> &protos);
+
     std::vector<Transport *> listTransports();
 
     void *getBaseAddr();

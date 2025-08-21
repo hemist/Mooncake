@@ -52,7 +52,7 @@ class TransferMetadata {
         std::string name;
         uint64_t addr;
         uint64_t length;
-        std::string protocal;
+        std::string protocol;
         std::vector<uint32_t> lkey;  // for rdma
         std::vector<uint32_t> rkey;  // for rdma
         std::string shm_name;        // for nvlink
@@ -62,7 +62,7 @@ class TransferMetadata {
     struct NVMeoFBufferDesc {
         std::string file_path;
         uint64_t length;
-        std::string protocal;
+        std::string protocol;
         std::unordered_map<std::string, std::string> local_path_map;
     };
 

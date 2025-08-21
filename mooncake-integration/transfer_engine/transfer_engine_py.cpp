@@ -111,7 +111,7 @@ int TransferEnginePy::initializeExt(const char *local_hostname,
                                     const char *protocol,
                                     const char *device_name,
                                     const char *metadata_type) {
-    LOG(INFO) << "Init protocal: " << protocol;
+    LOG(INFO) << "Init protocol: " << protocol;
     proto_ = protocol ? protocol : "tcp";
     std::string conn_string = buildConnString(metadata_type, metadata_server);
 

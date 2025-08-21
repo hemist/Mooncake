@@ -203,7 +203,18 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
     size_t global_segment_size, size_t local_buffer_size,
     const std::string &protocol, const std::string &rdma_devices,
     const std::string &master_server_addr) {
-    this->protocol = protocol;
+    
+    bool rdma_enabled = false;
+    bool cxl_enabled = false;
+    std::stringstream ss(protocol);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            if (item == "rdma") rdma_enabled = true;
+            if (item == "cxl") cxl_enabled = true;
+            this->protocols.push_back(item);
+        }
+    }
 
     // Remove port if hostname already contains one
     std::string hostname = local_hostname;
@@ -221,10 +232,10 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
         this->local_hostname = local_hostname;
     }
 
-    void **args = (protocol == "rdma") ? rdma_args(rdma_devices) : nullptr;
+    void **args = rdma_enabled ? rdma_args(rdma_devices) : nullptr;
     auto client_opt =
         mooncake::Client::Create(this->local_hostname, metadata_server,
-                                 protocol, args, master_server_addr);
+                                 this->protocols, args, master_server_addr);
     if (!client_opt) {
         LOG(ERROR) << "Failed to create client";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
@@ -244,30 +255,39 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
     // If global_segment_size is 0, skip mount segment;
     // If global_segment_size is larger than max_mr_size, split to multiple
     // segments.
-    bool is_cxl = (protocol == "cxl") ? true : false;
-    auto max_mr_size = is_cxl ? DEFAULT_CXL_SIZE : globalConfig().max_mr_size;     // Max segment size
-    uint64_t total_glbseg_size = is_cxl ? DEFAULT_CXL_SIZE : global_segment_size;  // For logging
-    uint64_t current_glbseg_size = 0;                  // For logging
-    while (global_segment_size > 0) {
-        size_t segment_size = std::min(global_segment_size, max_mr_size);
-        global_segment_size -= segment_size;
-        current_glbseg_size += segment_size;
-        LOG(INFO) << "Mounting segment: " << segment_size << " bytes, "
-                  << current_glbseg_size << " of " << total_glbseg_size;
-        void *ptr = (protocol == "cxl") ? 
-                        client_->GetBaseAddr() :
-                        allocate_buffer_allocator_memory(segment_size);
-        if (!ptr) {
-            LOG(ERROR) << "Failed to initialize segment memory";
-            return tl::unexpected(ErrorCode::INVALID_PARAMS);
-        }
-        if (!is_cxl)
-            segment_ptrs_.emplace_back(ptr);
-        auto mount_result = client_->MountSegment(ptr, segment_size, is_cxl);
-        if (!mount_result.has_value()) {
-            LOG(ERROR) << "Failed to mount segment: "
-                       << toString(mount_result.error());
-            return tl::unexpected(mount_result.error());
+
+    for (auto &protocol : client_->GetLevelProtocols()) {
+        if (protocol.first == StorageLevel::RAM) {
+            auto max_mr_size = globalConfig().max_mr_size;     // Max segment size
+            uint64_t total_glbseg_size = global_segment_size;  // For logging
+            uint64_t current_glbseg_size = 0;                  // For logging
+            while (global_segment_size > 0) {
+                size_t segment_size = std::min(global_segment_size, max_mr_size);
+                global_segment_size -= segment_size;
+                current_glbseg_size += segment_size;
+                LOG(INFO) << "Mounting RAM segment: " << segment_size << " bytes, "
+                        << current_glbseg_size << " of " << total_glbseg_size;
+                void *ptr = allocate_buffer_allocator_memory(segment_size);
+                if (!ptr) {
+                    LOG(ERROR) << "Failed to initialize segment memory";
+                    return tl::unexpected(ErrorCode::INVALID_PARAMS);
+                }
+                auto mount_result = client_->MountSegment(ptr, segment_size, protocol.first);
+                if (!mount_result.has_value()) {
+                    LOG(ERROR) << "Failed to mount segment: "
+                            << toString(mount_result.error());
+                    return tl::unexpected(mount_result.error());
+                }
+            }
+        } else if (protocol.first == StorageLevel::CXL) { 
+            void *ptr = client_->GetBaseAddr();
+            LOG(INFO) << "Mounting CXL segment: " << DEFAULT_CXL_SIZE << " bytes, " << ptr;
+            auto mount_result = client_->MountSegment(ptr, DEFAULT_CXL_SIZE, protocol.first);
+            if (!mount_result.has_value()) {
+                LOG(ERROR) << "Failed to mount segment: "
+                        << toString(mount_result.error());
+                return tl::unexpected(mount_result.error());
+            }
         }
     }
 
@@ -317,7 +337,7 @@ tl::expected<void, ErrorCode> DistributedObjectStore::tearDownAll_internal() {
     segment_ptrs_.clear();
     local_hostname = "";
     device_name = "";
-    protocol = "";
+    protocols.clear();
     return {};
 }
 

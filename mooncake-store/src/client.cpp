@@ -171,10 +171,11 @@ ErrorCode Client::ConnectToMaster(const std::string& master_server_entry) {
 
 ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
                                      const std::string& metadata_connstring,
-                                     const std::string& protocol,
+                                     const std::vector<std::string>& protocols,
                                      void** protocol_args) {
     // get auto_discover and filters from env
     bool auto_discover = get_auto_discover();
+    LOG(INFO) << "auto_discover: " << auto_discover;
     transfer_engine_.setAutoDiscover(auto_discover);
     transfer_engine_.setWhitelistFilters(
         get_auto_discover_filters(auto_discover));
@@ -184,34 +185,9 @@ ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
                                    hostname, port);
     CHECK_EQ(rc, 0) << "Failed to initialize transfer engine";
 
-    Transport* transport = nullptr;
-    if (protocol == "rdma") {
-        LOG(INFO) << "transport_type=rdma";
-        transport = transfer_engine_.installTransport("rdma", protocol_args);
-    } else if (protocol == "tcp") {
-        LOG(INFO) << "transport_type=tcp";
-        try {
-            transport = transfer_engine_.installTransport("tcp", protocol_args);
-        } catch (std::exception& e) {
-            LOG(ERROR) << "tcp_transport_install_failed error_message=\""
-                       << e.what() << "\"";
-            return ErrorCode::INTERNAL_ERROR;
-        }
-    }  else if (protocol == "cxl") {
-        LOG(INFO) << "transport_type=cxl";
-        try {
-            transport = transfer_engine_.installTransport("cxl", protocol_args);
-        } catch (std::exception& e) {
-            LOG(ERROR) << "cxl_transport_install_failed error_message=\""
-                       << e.what() << "\"";
-            return ErrorCode::INTERNAL_ERROR;
-        }
-    } else {
-        LOG(ERROR) << "unsupported_protocol protocol=" << protocol;
-        return ErrorCode::INVALID_PARAMS;
-    }
-    CHECK(transport) << "Failed to install transport";
-
+    rc = transfer_engine_.checkTransports(protocols);
+    CHECK_EQ(rc, 0) << "Failed to initialize transfer engine";
+    
     // Initialize TransferSubmitter after transfer engine is ready
     transfer_submitter_ = std::make_unique<TransferSubmitter>(
         transfer_engine_, local_hostname, storage_backend_);
@@ -221,7 +197,7 @@ ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
 
 std::optional<std::shared_ptr<Client>> Client::Create(
     const std::string& local_hostname, const std::string& metadata_connstring,
-    const std::string& protocol, void** protocol_args,
+    const std::vector<std::string>& protocols, void** protocol_args,
     const std::string& master_server_entry) {
     // If MOONCAKE_STORAGE_ROOT_DIR is set, use it as the storage root directory
     std::string storage_root_dir =
@@ -251,9 +227,12 @@ std::optional<std::shared_ptr<Client>> Client::Create(
         client->PrepareStorageBackend(storage_root_dir, response.value());
     }
 
+    // Dispatch protocols
+    client->DispatchProtocols(protocols);
+
     // Initialize transfer engine
     err = client->InitTransferEngine(local_hostname, metadata_connstring,
-                                     protocol, protocol_args);
+                                     protocols, protocol_args);
     if (err != ErrorCode::OK) {
         LOG(ERROR) << "Failed to initialize transfer engine";
         return std::nullopt;
@@ -899,6 +878,18 @@ void Client::BatchPuttoLocalFile(std::vector<PutOperation>& ops) {
     }
 }
 
+void Client::DispatchProtocols(const std::vector<std::string> &protocols) {
+    for (const auto& protocol : protocols) {
+        if (protocol == "tcp" || protocol == "rdma") {
+            level_protocols_[StorageLevel::RAM] = protocol;
+        } else if (protocol == "cxl") {
+            level_protocols_[StorageLevel::CXL] = protocol;
+        } else {
+            LOG(ERROR) << "Unsupported protocol: " << protocol;
+        }
+    }
+}
+
 std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     const std::vector<ObjectKey>& keys,
     std::vector<std::vector<Slice>>& batched_slices,
@@ -936,8 +927,8 @@ tl::expected<long, ErrorCode> Client::RemoveAll() {
 
 tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
                                                    size_t size,
-                                                   bool is_cxl) {
-    if (!is_cxl && (buffer == nullptr || size == 0 ||
+                                                   StorageLevel level) {
+    if ((static_cast<int>(level) < 1) && (buffer == nullptr || size == 0 ||
         reinterpret_cast<uintptr_t>(buffer) % facebook::cachelib::Slab::kSize ||
         size % facebook::cachelib::Slab::kSize)) {
         LOG(ERROR) << "buffer=" << buffer << " or size=" << size
@@ -962,9 +953,8 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         }
     }
 
-    // LYH: workaround for now
     std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
-    std::string proto = is_cxl ? "cxl" : "rdma";
+    std::string proto = this->level_protocols_[level];
     buffer_map[proto].emplace_back((void *)buffer, size, kWildcardLocation, true, true);
 
     int rc = transfer_engine_.registerLocalMemory(buffer_map);
@@ -974,11 +964,8 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
 
-    Segment segment = is_cxl
-        ? Segment(generate_uuid(), local_hostname_,
-              reinterpret_cast<uintptr_t>(buffer), size, StorageLevel::CXL)
-        : Segment(generate_uuid(), local_hostname_,
-              reinterpret_cast<uintptr_t>(buffer), size);
+    Segment segment = Segment(generate_uuid(), local_hostname_,
+              reinterpret_cast<uintptr_t>(buffer), size, level);
 
     auto mount_result = master_client_.MountSegment(segment, client_id_);
     if (!mount_result) {
@@ -991,6 +978,7 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
         return tl::unexpected(err);
     }
 
+    buffer_map.clear();
     mounted_segments_[segment.id] = segment;
     return {};
 }
@@ -1022,9 +1010,9 @@ tl::expected<void, ErrorCode> Client::UnmountSegment(const void* buffer,
         return tl::unexpected(err);
     }
 
-    // LYH: workaround for now
     std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
-    buffer_map["rdma"].emplace_back(reinterpret_cast<void*>(segment->second.base));
+    std::string proto = level_protocols_[segment->second.level];
+    buffer_map[proto].emplace_back(reinterpret_cast<void*>(segment->second.base));
     int rc = transfer_engine_.unregisterLocalMemory(buffer_map);
     if (rc != 0) {
         LOG(ERROR) << "Failed to unregister transfer buffer with transfer "
@@ -1045,9 +1033,14 @@ tl::expected<void, ErrorCode> Client::RegisterLocalMemory(
     void* addr, size_t length, const std::string& location,
     bool remote_accessible, bool update_metadata) {
     
-    // LYH: workaround for now
+    std::string proto = level_protocols_[StorageLevel::RAM];
+    if (proto.empty()) {
+        LOG(ERROR) << "No protocol is registered for level RAM";
+        return tl::unexpected(ErrorCode::PROTOCOL_ERROR);
+    }
+
     std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
-    buffer_map["rdma"].emplace_back(addr, length, location, remote_accessible, update_metadata);
+    buffer_map[proto].emplace_back(addr, length, location, remote_accessible, update_metadata);
     if (this->transfer_engine_.registerLocalMemory(buffer_map) != 0) {
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
@@ -1056,9 +1049,14 @@ tl::expected<void, ErrorCode> Client::RegisterLocalMemory(
 
 tl::expected<void, ErrorCode> Client::unregisterLocalMemory(
     void* addr, bool update_metadata) {
-    // LYH: workaround for now
+    std::string proto = level_protocols_[StorageLevel::RAM];
+    if (proto.empty()) {
+        LOG(ERROR) << "No protocol is registered for level RAM";
+        return tl::unexpected(ErrorCode::PROTOCOL_ERROR);
+    }
+
     std::unordered_map<std::string, std::vector<RegisteredBuffer>> buffer_map;
-    buffer_map["rdma"].emplace_back(addr, 0, kWildcardLocation, true, update_metadata);
+    buffer_map[proto].emplace_back(addr);
     if (this->transfer_engine_.unregisterLocalMemory(buffer_map) != 0) {
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }

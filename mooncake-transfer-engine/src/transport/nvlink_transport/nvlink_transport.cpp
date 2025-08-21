@@ -277,7 +277,7 @@ int NvlinkTransport::registerLocalMemory(void *addr, size_t length,
         desc.addr = (uint64_t)addr;
         desc.length = length;
         desc.name = location;
-        desc.protocal = "nvlink";
+        desc.protocol = "nvlink";
         desc.shm_name =
             serializeBinaryData(&handle, sizeof(cudaIpcMemHandle_t));
         return metadata_->addLocalMemoryBuffer(desc, true);

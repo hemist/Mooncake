@@ -26,9 +26,10 @@ ClientTestWrapper::CreateClientWrapper(const std::string& hostname,
                                        const std::string& master_server_entry,
                                        size_t local_buffer_size) {
     void** args = (protocol == "rdma") ? rdma_args(device_name) : nullptr;
+    std::vector<std::string> protocols = {protocol};
 
     auto client_opt = Client::Create(hostname,  // Local hostname
-                                     metadata_connstring, protocol, args,
+                                     metadata_connstring, protocols, args,
                                      master_server_entry);
 
     if (!client_opt.has_value()) {

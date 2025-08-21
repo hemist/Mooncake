@@ -249,9 +249,10 @@ int CxlTransport::registerLocalMemory(void *addr, size_t length,
         return -1;
     }
 
-    cxl_buffer_desc.offset = (uint64_t)addr - (uint64_t)cxl_base_addr;
+    cxl_buffer_desc.offset = ptr - base;
     cxl_buffer_desc.length = length;
-    cxl_buffer_desc.protocal = "cxl";
+    cxl_buffer_desc.protocol = "cxl";
+
     return metadata_->addLocalMemoryBuffer(cxl_buffer_desc, update_metadata);
 }
 
