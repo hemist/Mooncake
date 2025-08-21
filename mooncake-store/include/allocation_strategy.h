@@ -150,16 +150,15 @@ class LevelAllocationStrategy : public AllocationStrategy {
             allocators_by_name,
         size_t objectSize, const ReplicateConfig& config) override {
             
-        // both dram_allocator and cxl_allocator are present
-        if (allocators.size() > 1) {
-            if (auto allocated_buffer =
-                    TryPreferredAllocate(allocators_by_name, objectSize, config)) {
-                return allocated_buffer;
-            }
+        if (allocators.size() <= 0) {
+            return nullptr;
         }
 
-        // allocators[0] is cxl global allocator 
-        return CxlOffsetAllocate(allocators[0], objectSize, config);
+        if (config.preferred_storage_level == StorageLevel::RAM) {
+            return TryPreferredAllocate(allocators_by_name, objectSize, config);
+        } else if (config.preferred_storage_level == StorageLevel::CXL) {
+            return CxlOffsetAllocate(allocators[0], objectSize, config);
+        } else return nullptr;
     }
 
    private:
@@ -186,9 +185,27 @@ class LevelAllocationStrategy : public AllocationStrategy {
             allocators_by_name, 
         size_t objectSize, const ReplicateConfig& config) {
 
-        // todo
+        if (config.preferred_segment.empty()) {
+            return nullptr;
+        }
+
+        auto preferred_its = allocators_by_name.find(config.preferred_segment);
+        if (preferred_its == allocators_by_name.end()) {
+            return nullptr;
+        }
+
+        auto &allocator = preferred_its->second[0];
+        auto allocated_buffer = allocator->allocate(objectSize);
+        if (allocated_buffer) {
+            if (config.preferred_storage_level == StorageLevel::CXL) {
+                allocated_buffer->change_to_cxl(config.preferred_segment);
+            }
+            return allocated_buffer;
+        }
+
         return nullptr;
     }
+
 };
 
 }  // namespace mooncake

@@ -349,11 +349,13 @@ TransferStrategy TransferFuture::strategy() const {
 
 TransferSubmitter::TransferSubmitter(TransferEngine& engine,
                                      const std::string& local_hostname,
-                                     std::shared_ptr<StorageBackend>& backend)
+                                     std::shared_ptr<StorageBackend>& backend,
+                                     std::unordered_map<StorageLevel, std::string> level_protocols)
     : engine_(engine),
       local_hostname_(local_hostname),
       memcpy_pool_(std::make_unique<MemcpyWorkerPool>()),
-      fileread_pool_(std::make_unique<FilereadWorkerPool>(backend)) {
+      fileread_pool_(std::make_unique<FilereadWorkerPool>(backend)),
+      level_protocols_(std::move(level_protocols)) {
     CHECK(!local_hostname_.empty()) << "Local hostname cannot be empty";
 
     // Read MC_STORE_MEMCPY environment variable, default to false (disabled)
@@ -396,12 +398,13 @@ std::optional<TransferFuture> TransferSubmitter::submit(
         }
 
         TransferStrategy strategy = selectStrategy(handles, slices);
+        std::string proto = level_protocols_[replica.get_storage_level()];
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
                 return submitMemcpyOperation(handles, slices, op_code);
             case TransferStrategy::TRANSFER_ENGINE:
-                return submitTransferEngineOperation(handles, slices, op_code);
+                return submitTransferEngineOperation(handles, slices, op_code, proto);
             default:
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
                 return std::nullopt;
@@ -454,7 +457,10 @@ std::optional<TransferFuture> TransferSubmitter::submitMemcpyOperation(
 
 std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     const std::vector<AllocatedBuffer::Descriptor>& handles,
-    std::vector<Slice>& slices, Transport::TransferRequest::OpCode op_code) {
+    std::vector<Slice>& slices, 
+    Transport::TransferRequest::OpCode op_code,
+    std::string &proto) {
+
     // Create transfer requests
     std::vector<Transport::TransferRequest> requests;
     requests.reserve(handles.size());
@@ -463,8 +469,7 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         const auto& handle = handles[i];
         const auto& slice = slices[i];
 
-        Transport::SegmentHandle seg =
-            engine_.openSegment(handle.segment_name_);
+        Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
         if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
             LOG(ERROR) << "Failed to open segment " << handle.segment_name_;
             return std::nullopt;
@@ -488,10 +493,9 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         return std::nullopt;
     }
 
-    std::string proto_str("cxl");
-
+    LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
     // Submit transfer
-    Status s = engine_.submitTransfer(batch_id, requests, proto_str);
+    Status s = engine_.submitTransfer(batch_id, requests, proto);
     if (!s.ok()) {
         LOG(ERROR) << "Failed to submit all transfers, error code is "
                    << s.code();

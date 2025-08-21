@@ -354,7 +354,8 @@ class TransferSubmitter {
    public:
     explicit TransferSubmitter(TransferEngine& engine,
                                const std::string& local_hostname,
-                               std::shared_ptr<StorageBackend>& backend);
+                               std::shared_ptr<StorageBackend>& backend,
+                               std::unordered_map<StorageLevel, std::string> level_protocols);
 
     /**
      * @brief Submit an asynchronous transfer operation
@@ -379,6 +380,8 @@ class TransferSubmitter {
     std::unique_ptr<MemcpyWorkerPool> memcpy_pool_;
     std::unique_ptr<FilereadWorkerPool> fileread_pool_;
     bool memcpy_enabled_;
+    // Store Level
+    std::unordered_map<StorageLevel, std::string> level_protocols_;
 
     /**
      * @brief Select the optimal transfer strategy
@@ -412,7 +415,9 @@ class TransferSubmitter {
      */
     std::optional<TransferFuture> submitTransferEngineOperation(
         const std::vector<AllocatedBuffer::Descriptor>& handles,
-        std::vector<Slice>& slices, Transport::TransferRequest::OpCode op_code);
+        std::vector<Slice>& slices, 
+        Transport::TransferRequest::OpCode op_code,
+        std::string &proto);
 
     std::optional<TransferFuture> submitFileReadOperation(
     const Replica::Descriptor& replica, std::vector<Slice>& slices, 

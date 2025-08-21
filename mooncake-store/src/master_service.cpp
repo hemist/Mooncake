@@ -420,6 +420,7 @@ auto MasterService::PutStart(const std::string& key,
             }
 
             replicas.emplace_back(std::move(handles),
+                                  client_config.preferred_storage_level,
                                   ReplicaStatus::PROCESSING);
         }
     }

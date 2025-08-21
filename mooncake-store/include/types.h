@@ -213,6 +213,14 @@ inline std::ostream& operator<<(std::ostream& os,
     return os;
 }
 
+enum class StorageLevel {
+    RAM = 0,
+    CXL,
+    SSD,
+
+    NUM_STORAGE_LEVELS
+};
+
 /**
  * @brief Configuration for replica management
  */
@@ -221,23 +229,18 @@ struct ReplicateConfig {
     bool with_soft_pin{false};
     std::string preferred_segment{};  // Preferred segment for allocation
     UUID client_id{0, 0};
+    StorageLevel preferred_storage_level{StorageLevel::RAM};
 
     friend std::ostream& operator<<(std::ostream& os,
                                     const ReplicateConfig& config) noexcept {
         return os << "ReplicateConfig: { replica_num: " << config.replica_num
                   << ", with_soft_pin: " << config.with_soft_pin
                   << ", preferred_segment: " << config.preferred_segment
-                  << ", client_id: " << config.client_id
+                  << ", client_id: " << config.client_id 
+                  << ", preferred_storage_level: " << static_cast<int>(
+                       config.preferred_storage_level)
                   << " }";
     }
-};
-
-enum class StorageLevel {
-    RAM = 0,
-    CXL,
-    SSD,
-
-    NUM_STORAGE_LEVELS
 };
 
 /**
@@ -363,11 +366,15 @@ class Replica {
 
     Replica() = default;
     Replica(std::vector<std::unique_ptr<AllocatedBuffer>> buffers,
+            StorageLevel storage_level,
             ReplicaStatus status)
-        : buffers_(std::move(buffers)), status_(status) {}
+        : buffers_(std::move(buffers)),
+          storage_level_(storage_level),
+          status_(status) {}
 
     void reset() noexcept {
         buffers_.clear();
+        storage_level_ = StorageLevel::RAM;
         status_ = ReplicaStatus::UNDEFINED;
     }
 
@@ -399,10 +406,15 @@ class Replica {
 
     struct Descriptor {
         std::variant<MemoryDescriptor, DiskDescriptor> descriptor_variant;
+        StorageLevel storage_level;
         ReplicaStatus status;
-        YLT_REFL(Descriptor, descriptor_variant, status);
+        YLT_REFL(Descriptor, descriptor_variant, storage_level, status);
 
         // Helper functions
+        StorageLevel get_storage_level() const noexcept {
+            return storage_level;
+        }
+
         bool is_memory_replica() noexcept {
             return std::holds_alternative<MemoryDescriptor>(descriptor_variant);
         }
@@ -444,12 +456,14 @@ class Replica {
 
    private:
     std::vector<std::unique_ptr<AllocatedBuffer>> buffers_;
+    StorageLevel storage_level_;
     ReplicaStatus status_{ReplicaStatus::UNDEFINED};
 };
 
 inline Replica::Descriptor Replica::get_descriptor() const {
     Replica::Descriptor desc;
     desc.status = status_;
+    desc.storage_level = storage_level_;
     MemoryDescriptor mem_desc;
     mem_desc.buffer_descriptors.reserve(buffers_.size());
     for (const auto& buf_ptr : buffers_) {

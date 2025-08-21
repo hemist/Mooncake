@@ -205,13 +205,11 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
     const std::string &master_server_addr) {
     
     bool rdma_enabled = false;
-    bool cxl_enabled = false;
     std::stringstream ss(protocol);
     std::string item;
     while (std::getline(ss, item, ',')) {
         if (!item.empty()) {
             if (item == "rdma") rdma_enabled = true;
-            if (item == "cxl") cxl_enabled = true;
             this->protocols.push_back(item);
         }
     }

@@ -187,10 +187,12 @@ ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
 
     rc = transfer_engine_.checkTransports(protocols);
     CHECK_EQ(rc, 0) << "Failed to initialize transfer engine";
+
+    auto level_protocols_cp = level_protocols_;
     
     // Initialize TransferSubmitter after transfer engine is ready
     transfer_submitter_ = std::make_unique<TransferSubmitter>(
-        transfer_engine_, local_hostname, storage_backend_);
+        transfer_engine_, local_hostname, storage_backend_, level_protocols_cp);
 
     return ErrorCode::OK;
 }
