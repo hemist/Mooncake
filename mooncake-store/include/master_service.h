@@ -21,6 +21,7 @@
 #include "mutex.h"
 #include "segment.h"
 #include "types.h"
+#include "master_mq_service.h"
 
 namespace mooncake {
 // Forward declarations
@@ -464,6 +465,8 @@ class MasterService {
 
     // cxl storage controller
     const bool enable_cxl_; 
+
+    std::shared_ptr<MasterMQService> master_mq_service_;
 };
 
 }  // namespace mooncake

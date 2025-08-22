@@ -32,6 +32,7 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
       enable_ha_(enable_ha),
       cluster_id_(cluster_id),
       segment_manager_(memory_allocator, enable_cxl),
+      master_mq_service_(std::make_shared<MasterMQService>()),
       enable_cxl_(enable_cxl) {
     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
         LOG(ERROR) << "Eviction ratio must be between 0.0 and 1.0, "

@@ -68,6 +68,14 @@ using EtcdLeaseId = int64_t;
 #endif
 
 using UUID = std::pair<uint64_t, uint64_t>;
+struct UUIDHash {
+    std::size_t operator()(const UUID& uuid) const noexcept {
+        std::size_t h1 = std::hash<uint64_t>()(uuid.first);
+        std::size_t h2 = std::hash<uint64_t>()(uuid.second);
+        return h1 ^ (h2 << 1);
+    }
+
+};
 
 inline std::ostream& operator<<(std::ostream& os, const UUID& uuid) noexcept {
     os << uuid.first << "-" << uuid.second;
