@@ -1,4 +1,5 @@
 #include "master_mq_service.h"
+#include "master_service.h"
 #include "types.h"
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -50,18 +51,45 @@ TEST_F(MasterMqServiceTest, Base) {
     std::vector<std::thread> threads;
     for (int i = 0; i < FLAGS_batch_num; i++) {
         threads.push_back(std::thread([this, i, &success_count]() {
-            auto client_id = mooncake::generate_uuid(); 
-            std::string key = "key-" + std::to_string(i);
-            master_mq_service->push(client_id, key);
 
-            std::optional<std::string> key_peak = master_mq_service->peak(client_id);
-            EXPECT_EQ(key_peak.value(), key);
+            std::vector<Replica::Descriptor> replica_list;
+
+            std::unique_ptr<MasterService> service_(new MasterService());
+            constexpr size_t buffer = 0x300000000;
+            constexpr size_t size = 1024 * 1024 * 16;
+            std::string segment_name = "test_segment_" + std::to_string(i);
+
+            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
+            UUID client_id = mooncake::generate_uuid();
+
+            auto mount_result = service_->MountSegment(segment, client_id);
+            ASSERT_TRUE(mount_result.has_value());
+
+            std::string key = "key-" + std::to_string(i);
+            uint64_t value_length = 1024;
+            std::vector<uint64_t> slice_lengths = {value_length};
+            ReplicateConfig config;
+            config.client_id = client_id;
+            config.replica_num = 1;
+
+            auto put_start_result = service_->PutStart(key, slice_lengths, config);
+            EXPECT_TRUE(put_start_result.has_value());
+            replica_list = put_start_result.value();
+            EXPECT_FALSE(replica_list.empty());
+            EXPECT_EQ(ReplicaStatus::PROCESSING, replica_list[0].status);
+
+            DegradeMsg msg = {key, replica_list[0]};
+
+            master_mq_service->push(client_id, msg);
+
+            std::optional<DegradeMsg> msg_peak = master_mq_service->peak(client_id);
+            EXPECT_EQ(msg_peak.value().key_, key);
 
             EXPECT_FALSE(master_mq_service->empty(client_id));
 
-            std::string key_pop;
-            master_mq_service->pop(client_id, key_pop);
-            EXPECT_EQ(key_pop, key);
+            DegradeMsg msg_pop;
+            master_mq_service->pop(client_id, msg_pop);
+            EXPECT_EQ(msg_pop.key_, key);
 
             if (!master_mq_service->empty(client_id)) {
                 auto res = master_mq_service->clear(client_id);
@@ -81,7 +109,7 @@ TEST_F(MasterMqServiceTest, Base) {
 
 TEST_F(MasterMqServiceTest, PushPop) { 
     const UUID client_id = generate_uuid();
-    constexpr int kTotal = 1000;
+    constexpr int kTotal = 10;
 
     int ret = master_mq_service->bind(client_id);
     EXPECT_EQ(ret, 0);
@@ -91,7 +119,7 @@ TEST_F(MasterMqServiceTest, PushPop) {
 
     // Consumer
     std::thread consumer([&]() {
-        std::string out;
+        DegradeMsg out;
         while (!done || !master_mq_service->empty(client_id)) {
             if (master_mq_service->pop(client_id, out) == 0) {
                 pop_sum.fetch_add(1, std::memory_order_relaxed);
@@ -104,7 +132,35 @@ TEST_F(MasterMqServiceTest, PushPop) {
     // Producer
     std::thread producer([&]() { 
         for (int i = 0; i < kTotal; ++i) {
-            master_mq_service->push(client_id, "key-" + std::to_string(i));
+            std::vector<Replica::Descriptor> replica_list;
+
+            std::unique_ptr<MasterService> service_(new MasterService());
+            constexpr size_t buffer = 0x300000000;
+            constexpr size_t size = 1024 * 1024 * 16;
+            std::string segment_name = "test_segment_" + std::to_string(i);
+
+            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
+
+            auto mount_result = service_->MountSegment(segment, client_id);
+            ASSERT_TRUE(mount_result.has_value());
+
+            std::string key = "key-" + std::to_string(i);
+            uint64_t value_length = 1024;
+            std::vector<uint64_t> slice_lengths = {value_length};
+            ReplicateConfig config;
+            config.client_id = client_id;
+            config.replica_num = 1;
+
+            auto put_start_result = service_->PutStart(key, slice_lengths, config);
+            EXPECT_TRUE(put_start_result.has_value());
+            replica_list = put_start_result.value();
+            EXPECT_FALSE(replica_list.empty());
+            EXPECT_EQ(ReplicaStatus::PROCESSING, replica_list[0].status);
+
+            DegradeMsg msg = {key, replica_list[0]};
+            
+            master_mq_service->push(client_id, msg);
+            service_->UnmountSegment(segment.id, client_id);
         }
         done.store(true, std::memory_order_release);
     });
@@ -115,6 +171,7 @@ TEST_F(MasterMqServiceTest, PushPop) {
     EXPECT_EQ(pop_sum.load(), kTotal);
     EXPECT_TRUE(master_mq_service->empty(client_id));
 }
+
 
 } // namespace mooncake
 

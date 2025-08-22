@@ -468,6 +468,12 @@ class Replica {
     ReplicaStatus status_{ReplicaStatus::UNDEFINED};
 };
 
+struct DegradeMsg {
+    std::string key_;
+    Replica::Descriptor descriptor_;
+    YLT_REFL(DegradeMsg, key_, descriptor_);
+};
+
 inline Replica::Descriptor Replica::get_descriptor() const {
     Replica::Descriptor desc;
     desc.status = status_;

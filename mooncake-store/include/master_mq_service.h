@@ -11,16 +11,16 @@ namespace mooncake {
 class MasterMQService {
    public:
     MasterMQService() = default;
-    void push(const UUID& client_id, const std::string& key);
-    int pop(const UUID& client_id, std::string& key);
+    void push(const UUID& client_id, DegradeMsg &msg);
+    int pop(const UUID& client_id, DegradeMsg &msg);
     int bind(const UUID& client_id);
-    std::optional<std::string> peak(const UUID& client_id);
+    std::optional<DegradeMsg> peak(const UUID& client_id);
     int clear(const UUID& client_id);
     bool empty(const UUID& client_id) const;
 
    private:
     mutable std::shared_mutex mu_;
-    std::unordered_map<UUID, std::queue<std::string>, UUIDHash> degraed_mq_;
+    std::unordered_map<UUID, std::queue<DegradeMsg>, UUIDHash> degraed_mq_;
 };
 
 } // namespace mooncake

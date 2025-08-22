@@ -15,7 +15,7 @@ target_link_libraries(master_service_test PUBLIC mooncake_store cachelib_memory_
 add_test(NAME master_service_test COMMAND master_service_test)
 
 add_executable(master_mq_service_test master_mq_service_test.cpp)
-target_link_libraries(master_mq_service_test PUBLIC mooncake_store gflags glog gtest gtest_main pthread)
+target_link_libraries(master_mq_service_test PUBLIC mooncake_store cachelib_memory_allocator ${ETCD_WRAPPER_LIB} gflags glog gtest gtest_main pthread)
 add_test(NAME master_mq_service_test COMMAND master_mq_service_test)
 
 add_executable(client_integration_test client_integration_test.cpp)
