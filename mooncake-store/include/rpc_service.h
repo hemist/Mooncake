@@ -94,9 +94,12 @@ class WrappedMasterService {
 
     tl::expected<void, ErrorCode> MigrateEnd(const std::string& key,
                                              const ReplicateConfig& config);
+        
+    tl::expected<DegradeMsg, ErrorCode> PopMasterMQ(const UUID& client_id);
 
    private:
     MasterService master_service_;
+    std::shared_ptr<MasterMQService> master_mq_service_;
     std::thread metric_report_thread_;
     coro_http::coro_http_server http_server_;
     std::atomic<bool> metric_report_running_;

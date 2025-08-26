@@ -34,6 +34,7 @@ WrappedMasterService::WrappedMasterService(
                       allow_evict_soft_pinned_objects, eviction_ratio,
                       eviction_high_watermark_ratio, view_version,
                       client_live_ttl_sec, enable_ha, cluster_id, memory_allocator, enable_cxl),
+      master_mq_service_(std::make_shared<MasterMQService>()),
       http_server_(4, http_port),
       metric_report_running_(enable_metric_reporting) {
     init_http_server();
@@ -496,6 +497,17 @@ tl::expected<void, ErrorCode> WrappedMasterService::MigrateEnd(const std::string
         [] { MasterMetricManager::instance().inc_put_end_requests(); },
         [] { MasterMetricManager::instance().inc_put_end_failures(); });
 }
+
+tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID& client_id) {
+    DegradeMsg msg;
+    int ret = master_mq_service_->pop(client_id, msg);
+    if (ret != 0) {
+        return tl::unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
+    }
+    return msg;
+}
+
+
 
 void RegisterRpcService(
     coro_rpc::coro_rpc_server& server,

@@ -217,6 +217,20 @@ class MasterClient {
     [[nodiscard]] tl::expected<void, ErrorCode> MigrateEnd(const std::string& key,
                                                        const ReplicateConfig& config);
 
+    /**
+     * @brief Peak the master message queue by client id
+     * @param client_id The uuid of the client
+     * @return tl::expected<DegradeMsg, ErrorCode>
+     */
+    [[nodiscard]] tl::expected<DegradeMsg, ErrorCode> PopMasterMQ(const UUID& client_id);
+
+    /**
+     * @brief [Just For Test] Push the master message queue by client id
+     * @param client_id The uuid of the client
+     * @param msg The message to push
+     * @return tl::expected<void, ErrorCode>
+     */
+ 
    private:
     /**
      * @brief Accessor for the coro_rpc_client. Since coro_rpc_client cannot

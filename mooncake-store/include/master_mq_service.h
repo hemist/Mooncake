@@ -11,7 +11,7 @@ namespace mooncake {
 class MasterMQService {
    public:
     MasterMQService() = default;
-    void push(const UUID& client_id, DegradeMsg &msg);
+    int push(const UUID& client_id, DegradeMsg &msg);
     int pop(const UUID& client_id, DegradeMsg &msg);
     int bind(const UUID& client_id);
     std::optional<DegradeMsg> peak(const UUID& client_id);

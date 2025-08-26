@@ -9,13 +9,14 @@ bool illegal_uuid(const UUID& uuid) {
     return uuid == UUID{0, 0};
 }
 
-void MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
+int MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
     if (illegal_uuid(client_id)) {
         LOG(ERROR) << "Client id is illegal";
-        return;
+        return -1;
     }
     std::unique_lock lock(mu_);
     degraed_mq_[client_id].push(msg);
+    return 0;
 }
 
 int MasterMQService::pop(const UUID& client_id, DegradeMsg &msg) {

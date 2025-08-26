@@ -702,6 +702,31 @@ tl::expected<void, ErrorCode> MasterClient::MigrateEnd(const std::string& key,
     timer.LogResponseExpected(result);
     return result;
 }
+tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client_id) {
+    ScopedVLogTimer timer(1, "MasterClient::PeakMasterMQ");
+
+    auto client = client_accessor_.GetClient();
+    if (!client) {
+        LOG(ERROR) << "Client not available";
+        timer.LogResponse("error=Client not available");
+        return tl::make_unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    auto request_result = client->send_request<&WrappedMasterService::PopMasterMQ>(client_id);
+    auto result =
+        coro::syncAwait([&]() -> coro::Lazy<tl::expected<DegradeMsg, ErrorCode>> {
+            auto result = co_await co_await request_result;
+            if (!result) {
+                LOG(ERROR) << "Failed to pop master MQ operation: "
+                           << result.error().msg;
+                co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+            }
+            co_return result->result();
+        }());
+    timer.LogResponseExpected(result);
+    return result;
+}
+
 
 
 }  // namespace mooncake
