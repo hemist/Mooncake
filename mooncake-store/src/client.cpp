@@ -1105,6 +1105,69 @@ void* Client::GetBaseAddr() {
     return transfer_engine_.getBaseAddr();
 }
 
+tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
+    Replica::Descriptor descriptor = msg.descriptor_;
+    std::vector<AllocatedBuffer::Descriptor> desces = descriptor.get_buffer_descriptors();
+
+    // Prepare slices
+    std::vector<Slice> slices;
+    std::vector<size_t> slice_lengths;
+    for (const auto& desc : desces) {
+        slices.emplace_back(
+            Slice{static_cast<void*>(reinterpret_cast<char*>(desc.buffer_address_)), 
+            desc.size_
+        });
+        slice_lengths.emplace_back(desc.size_);
+    }
+
+    // Add client info into replica_config for storage level strategy
+    int migrate_level = static_cast<int>(descriptor.get_storage_level()) + 1;
+    if (migrate_level >= static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS)) {
+        LOG(ERROR) << "Invalid storage level: " << migrate_level;
+        return tl::unexpected(ErrorCode::INVALID_PARAMS);
+    }
+    ReplicateConfig client_config = ReplicateConfig{
+        1, false, "", client_id_, static_cast<StorageLevel>(migrate_level)};
+
+    
+
+    // Start migrate operation
+    auto start_result = master_client_.MigrateStart(msg.key_, slice_lengths, client_config);
+    if (!start_result) {
+        ErrorCode err = start_result.error();
+        if (err == ErrorCode::OBJECT_ALREADY_EXISTS) {
+            VLOG(1) << "object_already_exists key=" << msg.key_;
+            return {};
+        }
+        LOG(ERROR) << "Failed to start put operation: " << err;
+        return tl::unexpected(err);
+    }
+
+    // Transfer data using allocated handles from all replicas
+    for (const auto& replica : start_result.value()) {
+        ErrorCode transfer_err = TransferWrite(replica, slices);
+        if (transfer_err != ErrorCode::OK) {
+            // Revoke put operation
+            auto revoke_result = master_client_.MigrateRevoke(msg.key_, client_config);
+            if (!revoke_result) {
+                LOG(ERROR) << "Failed to revoke put operation";
+                return tl::unexpected(revoke_result.error());
+            }
+            return tl::unexpected(transfer_err);
+        }
+    }
+
+    // End put operation
+    auto end_result = master_client_.MigrateEnd(msg.key_, client_config);
+    if (!end_result) {
+        ErrorCode err = end_result.error();
+        LOG(ERROR) << "Failed to end put operation: " << err;
+        return tl::unexpected(err);
+    }
+
+    return {};
+}
+
 void Client::PrepareStorageBackend(const std::string& storage_root_dir,
                                    const std::string& fsdir) {
     // Initialize storage backend

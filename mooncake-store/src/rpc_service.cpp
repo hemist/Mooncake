@@ -463,6 +463,40 @@ WrappedMasterService::Ping(const UUID& client_id) {
     return result;
 }
 
+tl::expected<std::vector<Replica::Descriptor>, ErrorCode> 
+WrappedMasterService::MigrateStart(
+    const std::string& key,
+    const std::vector<uint64_t>& slice_lengths,
+    const ReplicateConfig& config) {
+    return execute_rpc(
+        "MigrateStart",
+        [&] { return master_service_.MigrateStart(key, slice_lengths, config); },
+        [&](auto& timer) {
+            timer.LogRequest("key=", key,
+                             ", slice_lengths=", slice_lengths.size());
+        },
+        [&] { MasterMetricManager::instance().inc_put_start_requests(); },
+        [] { MasterMetricManager::instance().inc_put_start_failures(); });
+}
+
+tl::expected<void, ErrorCode> 
+WrappedMasterService::MigrateRevoke(const std::string& key,
+                                    const ReplicateConfig& config) {
+    return execute_rpc(
+        "MigrateRevoke", [&] { return master_service_.MigrateRevoke(key, config); },
+        [&](auto& timer) { timer.LogRequest("key=", key); },
+        [] { MasterMetricManager::instance().inc_put_revoke_requests(); },
+        [] { MasterMetricManager::instance().inc_put_revoke_failures(); });
+}
+tl::expected<void, ErrorCode> WrappedMasterService::MigrateEnd(const std::string& key,
+                                         const ReplicateConfig& config) {
+    return execute_rpc(
+        "MigrateEnd", [&] { return master_service_.MigrateEnd(key, config); },
+        [&](auto& timer) { timer.LogRequest("key=", key); },
+        [] { MasterMetricManager::instance().inc_put_end_requests(); },
+        [] { MasterMetricManager::instance().inc_put_end_failures(); });
+}
+
 void RegisterRpcService(
     coro_rpc::coro_rpc_server& server,
     mooncake::WrappedMasterService& wrapped_master_service) {
@@ -500,6 +534,10 @@ void RegisterRpcService(
     server.register_handler<&mooncake::WrappedMasterService::GetFsdir>(
         &wrapped_master_service);
     server.register_handler<&mooncake::WrappedMasterService::BatchExistKey>(
+        &wrapped_master_service);
+    server.register_handler<&mooncake::WrappedMasterService::MigrateStart>(
+        &wrapped_master_service);
+    server.register_handler<&mooncake::WrappedMasterService::MigrateEnd>(
         &wrapped_master_service);
 }
 

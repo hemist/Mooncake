@@ -239,6 +239,13 @@ struct ReplicateConfig {
     UUID client_id{0, 0};
     StorageLevel preferred_storage_level{StorageLevel::RAM};
 
+    YLT_REFL(ReplicateConfig, 
+             replica_num, 
+             with_soft_pin, 
+             preferred_segment, 
+             client_id, 
+             preferred_storage_level);
+
     friend std::ostream& operator<<(std::ostream& os,
                                     const ReplicateConfig& config) noexcept {
         return os << "ReplicateConfig: { replica_num: " << config.replica_num
@@ -423,6 +430,7 @@ class Replica {
             return storage_level;
         }
 
+
         bool is_memory_replica() noexcept {
             return std::holds_alternative<MemoryDescriptor>(descriptor_variant);
         }
@@ -459,6 +467,13 @@ class Replica {
                 return *desc;
             }
             throw std::runtime_error("Expected DiskDescriptor");
+        }
+
+        std::vector<AllocatedBuffer::Descriptor> get_buffer_descriptors() const {
+            if (is_memory_replica()) {
+                return get_memory_descriptor().buffer_descriptors;
+            }
+            return {};
         }
     };
 

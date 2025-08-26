@@ -247,6 +247,36 @@ class MasterService {
      */
     tl::expected<std::string, ErrorCode> GetFsdir() const;
 
+    /**
+     * @brief Start a migrate operation for an object, allocate buffers for the
+     * slices on the lower level storage
+     * @param[out] replica_list Vector to store replica information for slices
+     * @return ErrorCode::OK on success, ErrorCode::OBJECT_NOT_FOUND if exists,
+     *         ErrorCode::NO_AVAILABLE_HANDLE if allocation fails,
+     *         ErrorCode::INVALID_PARAMS if slice size is invalid
+     */
+    auto MigrateStart(const std::string& key,
+                      const std::vector<uint64_t>& slice_lengths,
+                      const ReplicateConfig& config)
+        -> tl::expected<std::vector<Replica::Descriptor>, ErrorCode>;
+
+    /**
+     * @brief Revoke a migrate operation
+     * @return ErrorCode::OK on success, ErrorCode::OBJECT_NOT_FOUND if not
+     * found
+     */
+    auto MigrateRevoke(const std::string& key, const ReplicateConfig& config) 
+        -> tl::expected<void, ErrorCode>;
+
+    /**
+     * @brief Complete a migrate operation
+     * @return ErrorCode::OK on success, ErrorCode::OBJECT_NOT_FOUND if not
+     * found, ErrorCode::INVALID_WRITE if replica status is invalid
+     */
+    auto MigrateEnd(const std::string& key,
+                    const ReplicateConfig& config)
+        -> tl::expected<void, ErrorCode>;
+
    private:
     // GC thread function
     void GCThreadFunc();

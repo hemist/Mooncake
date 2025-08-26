@@ -186,6 +186,37 @@ class MasterClient {
     [[nodiscard]] tl::expected<PingResponse, ErrorCode>
     Ping(const UUID& client_id);
 
+    /**
+     * @brief Start a migrate operation for an object, allocate buffers for the
+     * slices on the lower level storage
+     * @param key Object key
+     * @param slice_lengths Vector of slice lengths
+     * @param value_length Total value length
+     * @param config Replication configuration
+     * @return tl::expected<std::vector<Replica::Descriptor>, ErrorCode>
+     * indicating success/failure
+     */
+    [[nodiscard]] tl::expected<std::vector<Replica::Descriptor>, ErrorCode>
+    MigrateStart(const std::string& key, const std::vector<size_t>& slice_lengths,
+             const ReplicateConfig& config);
+
+    /**
+     * @brief Revokes a migrate operation
+     * @param key Object key
+     * @return tl::expected<void, ErrorCode> indicating success/failure
+     */
+    [[nodiscard]] tl::expected<void, ErrorCode> MigrateRevoke(
+        const std::string& key, const ReplicateConfig& config);
+
+    /**
+     * @brief Complete a migrate operation
+     * @param key Object key
+     * @param config Replication configuration
+     * @return tl::expected<void, ErrorCode> indicating success/failure
+     */
+    [[nodiscard]] tl::expected<void, ErrorCode> MigrateEnd(const std::string& key,
+                                                       const ReplicateConfig& config);
+
    private:
     /**
      * @brief Accessor for the coro_rpc_client. Since coro_rpc_client cannot

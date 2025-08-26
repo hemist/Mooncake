@@ -30,6 +30,18 @@ target_link_libraries(client_integration_test PUBLIC
 )
 add_test(NAME client_integration_test COMMAND client_integration_test)
 
+add_executable(level_storage_test level_storage_test.cpp)
+target_link_libraries(level_storage_test PUBLIC
+    mooncake_store
+    cachelib_memory_allocator
+    ${ETCD_WRAPPER_LIB}
+    glog
+    gtest
+    gtest_main
+    pthread
+)
+add_test(NAME level_storage_test COMMAND level_storage_test)
+
 add_executable(master_metrics_test master_metrics_test.cpp)
 target_link_libraries(master_metrics_test PUBLIC mooncake_store cachelib_memory_allocator ${ETCD_WRAPPER_LIB} glog gtest gtest_main pthread)
 add_test(NAME master_metrics_test COMMAND master_metrics_test)

@@ -609,4 +609,99 @@ tl::expected<std::string, ErrorCode> MasterClient::GetFsdir() {
     return result;
 }
 
+tl::expected<std::vector<Replica::Descriptor>, ErrorCode>
+MasterClient::MigrateStart(const std::string& key,
+                       const std::vector<size_t>& slice_lengths,
+                       const ReplicateConfig& config) {
+    ScopedVLogTimer timer(1, "MasterClient::MigrateStart");
+    timer.LogRequest("key=", key, ", slice_count=", slice_lengths.size());
+
+    auto client = client_accessor_.GetClient();
+    if (!client) {
+        LOG(ERROR) << "Client not available";
+        timer.LogResponse("error=Client not available");
+        return tl::make_unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    // Convert size_t to uint64_t for RPC
+    std::vector<uint64_t> rpc_slice_lengths;
+    rpc_slice_lengths.reserve(slice_lengths.size());
+    for (const auto& length : slice_lengths) {
+        rpc_slice_lengths.push_back(length);
+    }
+
+    auto request_result = client->send_request<&WrappedMasterService::PutStart>(
+        key, rpc_slice_lengths, config);
+    auto result = coro::syncAwait(
+        [&]() -> coro::Lazy<
+                  tl::expected<std::vector<Replica::Descriptor>, ErrorCode>> {
+            auto result = co_await co_await request_result;
+            if (!result) {
+                LOG(ERROR) << "Failed to start migrate operation: "
+                           << result.error().msg;
+                co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+            }
+            co_return result->result();
+        }());
+    timer.LogResponseExpected(result);
+    return result;
+}
+
+tl::expected<void, ErrorCode> MasterClient::MigrateRevoke(const std::string& key,
+                                                          const ReplicateConfig& config) {
+    ScopedVLogTimer timer(1, "MasterClient::MigrateRevoke");
+    timer.LogRequest("key=", key);
+
+    auto client = client_accessor_.GetClient();
+    if (!client) {
+        LOG(ERROR) << "Client not available";
+        timer.LogResponse("error=Client not available");
+        return tl::make_unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    auto request_result =
+        client->send_request<&WrappedMasterService::MigrateRevoke>(key, config);
+    auto result =
+        coro::syncAwait([&]() -> coro::Lazy<tl::expected<void, ErrorCode>> {
+            auto result = co_await co_await request_result;
+            if (!result) {
+                LOG(ERROR) << "Failed to revoke put operation: "
+                           << result.error().msg;
+                co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+            }
+            co_return result->result();
+        }());
+    timer.LogResponseExpected(result);
+    return result;
+}
+
+tl::expected<void, ErrorCode> MasterClient::MigrateEnd(const std::string& key,
+                                                       const ReplicateConfig& config) {
+    ScopedVLogTimer timer(1, "MasterClient::MigrateEnd");
+    timer.LogRequest("key=", key);
+
+    auto client = client_accessor_.GetClient();
+    if (!client) {
+        LOG(ERROR) << "Client not available";
+        timer.LogResponse("error=Client not available");
+        return tl::make_unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    auto request_result =
+        client->send_request<&WrappedMasterService::MigrateEnd>(key, config);
+    auto result =
+        coro::syncAwait([&]() -> coro::Lazy<tl::expected<void, ErrorCode>> {
+            auto result = co_await co_await request_result;
+            if (!result) {
+                LOG(ERROR) << "Failed to end migrate operation: "
+                           << result.error().msg;
+                co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+            }
+            co_return result->result();
+        }());
+    timer.LogResponseExpected(result);
+    return result;
+}
+
+
 }  // namespace mooncake

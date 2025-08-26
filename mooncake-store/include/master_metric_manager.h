@@ -65,6 +65,12 @@ class MasterMetricManager {
     void inc_remount_segment_failures(int64_t val = 1);
     void inc_ping_requests(int64_t val = 1);
     void inc_ping_failures(int64_t val = 1);
+    void inc_migrate_start_requests(int64_t val = 1);
+    void inc_migrate_start_failures(int64_t val = 1);
+    void inc_migrate_end_requests(int64_t val = 1);
+    void inc_migrate_end_failures(int64_t val = 1);
+    void inc_migrate_revoke_requests(int64_t val = 1);
+    void inc_migrate_revoke_failures(int64_t val = 1);
 
     // Batch Operation Statistics (Counters)
     void inc_batch_exist_key_requests(int64_t val = 1);
@@ -102,6 +108,12 @@ class MasterMetricManager {
     int64_t get_remount_segment_failures();
     int64_t get_ping_requests();
     int64_t get_ping_failures();
+    int64_t get_migrate_start_requests();
+    int64_t get_migrate_start_failures();
+    int64_t get_migrate_end_requests();
+    int64_t get_migrate_end_failures();
+    int64_t get_migrate_revoke_requests();
+    int64_t get_migrate_revoke_failures();
 
     // Batch Operation Statistics Getters
     int64_t get_batch_exist_key_requests();
@@ -183,6 +195,12 @@ class MasterMetricManager {
     ylt::metric::counter_t remount_segment_failures_;
     ylt::metric::counter_t ping_requests_;
     ylt::metric::counter_t ping_failures_;
+    ylt::metric::counter_t migrate_start_requests_;
+    ylt::metric::counter_t migrate_start_failures_;
+    ylt::metric::counter_t migrate_end_requests_;
+    ylt::metric::counter_t migrate_end_failures_;
+    ylt::metric::counter_t migrate_revoke_requests_;
+    ylt::metric::counter_t migrate_revoke_failures_;
 
     // Batch Operation Statistics
     ylt::metric::counter_t batch_exist_key_requests_;

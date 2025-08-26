@@ -87,6 +87,18 @@ MasterMetricManager::MasterMetricManager()
                      "Total number of ping requests received"),
       ping_failures_("master_ping_failures_total",
                      "Total number of failed ping requests"),
+      migrate_start_requests_("master_migrate_start_requests_total",
+                          "Total number of MigrateStart requests received"),
+      migrate_start_failures_("master_migrate_start_failures_total",
+                          "Total number of failed MigrateStart requests"),
+      migrate_end_requests_("master_migrate_end_requests_total",
+                          "Total number of MigrateEnd requests received"),
+      migrate_end_failures_("master_migrate_end_failures_total",
+                          "Total number of failed MigrateEnd requests"),
+      migrate_revoke_requests_("master_migrate_revoke_requests_total",
+                          "Total number of MigrateRevoke requests received"),
+      migrate_revoke_failures_("master_migrate_revoke_failures_total",
+                          "Total number of failed MigrateRevoke requests"),
 
       // Initialize Batch Request Counters
       batch_exist_key_requests_("master_batch_exist_key_requests_total",
@@ -253,6 +265,26 @@ void MasterMetricManager::inc_ping_requests(int64_t val) {
 void MasterMetricManager::inc_ping_failures(int64_t val) {
     ping_failures_.inc(val);
 }
+void MasterMetricManager::inc_migrate_start_requests(int64_t val) {
+    migrate_start_requests_.inc(val);
+}
+void MasterMetricManager::inc_migrate_start_failures(int64_t val) {
+    migrate_start_failures_.inc(val);
+}
+void MasterMetricManager::inc_migrate_end_requests(int64_t val) {
+    migrate_end_requests_.inc(val);
+}
+void MasterMetricManager::inc_migrate_end_failures(int64_t val) {
+    migrate_end_failures_.inc(val);
+}
+
+void MasterMetricManager::inc_migrate_revoke_requests(int64_t val) {
+    migrate_revoke_requests_.inc(val);
+}
+
+void MasterMetricManager::inc_migrate_revoke_failures(int64_t val) {
+    migrate_revoke_failures_.inc(val);
+}
 
 // Batch Operation Statistics (Counters)
 void MasterMetricManager::inc_batch_exist_key_requests(int64_t val) {
@@ -372,6 +404,30 @@ int64_t MasterMetricManager::get_ping_requests() {
 
 int64_t MasterMetricManager::get_ping_failures() {
     return ping_failures_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_start_requests() {
+    return migrate_start_requests_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_start_failures() {
+    return migrate_start_failures_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_end_requests() {
+    return migrate_end_requests_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_end_failures() {
+    return migrate_end_failures_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_revoke_requests() {
+    return migrate_revoke_requests_.value();
+}
+
+int64_t MasterMetricManager::get_migrate_revoke_failures() {
+    return migrate_revoke_failures_.value();
 }
 
 int64_t MasterMetricManager::get_batch_exist_key_requests() {
@@ -498,6 +554,12 @@ std::string MasterMetricManager::serialize_metrics() {
         serialize_metric(ping_requests_);
         serialize_metric(ping_failures_);
     }
+    serialize_metric(migrate_start_requests_);
+    serialize_metric(migrate_start_failures_);
+    serialize_metric(migrate_end_requests_);
+    serialize_metric(migrate_end_failures_);
+    serialize_metric(migrate_revoke_requests_);
+    serialize_metric(migrate_revoke_failures_);
 
     // Serialize Batch Request Counters
     serialize_metric(batch_exist_key_requests_);
@@ -560,6 +622,10 @@ std::string MasterMetricManager::get_summary_string() {
     int64_t remove_fails = remove_failures_.value();
     int64_t remove_all = remove_all_requests_.value();
     int64_t remove_all_fails = remove_all_failures_.value();
+    int64_t migrate_starts = migrate_start_requests_.value();
+    int64_t migrate_start_fails = migrate_start_failures_.value();
+    int64_t migrate_ends = migrate_end_requests_.value();
+    int64_t migrate_end_fails = migrate_end_failures_.value();
 
     // Eviction counters
     int64_t eviction_success = eviction_success_.value();
@@ -595,6 +661,9 @@ std::string MasterMetricManager::get_summary_string() {
     if (enable_ha_) {
         ss << "Ping=" << ping - ping_fails << "/" << ping << ", ";
     }
+    ss << "Migrate="
+       << migrate_starts - migrate_start_fails + migrate_ends - migrate_end_fails
+       << "/" << migrate_starts + migrate_ends;
 
     // Eviction summary
     ss << " | Eviction: "

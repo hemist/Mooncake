@@ -211,6 +211,8 @@ class Client {
         return level_protocols_;
     }
 
+    tl::expected<void, ErrorCode> Migrate(DegradeMsg &msg);
+
    private:
     /**
      * @brief Private constructor to enforce creation through Create() method

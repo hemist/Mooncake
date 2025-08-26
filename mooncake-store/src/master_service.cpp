@@ -633,6 +633,163 @@ tl::expected<std::string, ErrorCode> MasterService::GetFsdir() const {
     return cluster_id_;
 }
 
+auto MasterService::MigrateStart(const std::string& key,
+                                 const std::vector<uint64_t>& slice_lengths,
+                                 const ReplicateConfig& config)
+    -> tl::expected<std::vector<Replica::Descriptor>, ErrorCode> {
+    if (config.replica_num == 0 || key.empty() || slice_lengths.empty()) {
+        LOG(ERROR) << "key=" << key << ", replica_num=" << config.replica_num
+                   << ", slice_count=" << slice_lengths.size()
+                   << ", key_size=" << key.size() << ", error=invalid_params";
+        return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
+    }
+
+    // Validate slice lengths
+    uint64_t total_length = 0;
+    for (size_t i = 0; i < slice_lengths.size(); ++i) {
+        if (slice_lengths[i] > kMaxSliceSize) {
+            LOG(ERROR) << "key=" << key << ", slice_index=" << i
+                       << ", slice_size=" << slice_lengths[i]
+                       << ", max_size=" << kMaxSliceSize
+                       << ", error=invalid_slice_size";
+            return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
+        }
+        total_length += slice_lengths[i];
+    }
+
+    VLOG(1) << "key=" << key << ", value_length=" << total_length
+            << ", slice_count=" << slice_lengths.size() << ", config=" << config
+            << ", action=put_start_begin";
+
+    // Lock the shard and check if object already exists
+    size_t shard_idx = getShardIndex(key);
+    MutexLocker lock(&metadata_shards_[shard_idx].mutex);
+
+    auto it = metadata_shards_[shard_idx].metadata.find(key);
+    if (it != metadata_shards_[shard_idx].metadata.end() &&
+        !CleanupStaleHandles(it->second)) {
+        LOG(INFO) << "key=" << key << ", info=object_already_exists";
+        return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
+    }
+
+    ScopedSegmentAllocatorAccess segment_allocator_access = segment_manager_.getAllocatorAccess();
+
+    // Allocate replicas
+    std::vector<Replica> replicas;
+    replicas.reserve(config.replica_num);
+    {
+        auto& allocators = segment_allocator_access.getAllocators();
+        auto& allocators_by_name = segment_allocator_access.getAllocatorsByName();
+        for (size_t i = 0; i < config.replica_num; ++i) {
+            std::vector<std::unique_ptr<AllocatedBuffer>> handles;
+            handles.reserve(slice_lengths.size());
+
+            // Allocate space for each slice
+            for (size_t j = 0; j < slice_lengths.size(); ++j) {
+                auto chunk_size = slice_lengths[j];
+
+                // Use the unified allocation strategy with replica config
+                auto handle = allocation_strategy_->Allocate(
+                    allocators, allocators_by_name, chunk_size, config);
+
+                if (!handle) {
+                    LOG(ERROR)
+                        << "key=" << key << ", replica_id=" << i
+                        << ", slice_index=" << j << ", error=allocation_failed";
+                    // If the allocation failed, we need to evict some objects
+                    // to free up space for future allocations.
+                    need_eviction_ = true;
+                    return tl::make_unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
+                }
+
+                VLOG(1) << "key=" << key << ", replica_id=" << i
+                        << ", slice_index=" << j << ", handle=" << *handle
+                        << ", action=slice_allocated";
+                handles.emplace_back(std::move(handle));
+            }
+
+            replicas.emplace_back(std::move(handles),
+                                  config.preferred_storage_level,
+                                  ReplicaStatus::PROCESSING);
+        }
+    }
+
+    std::vector<Replica::Descriptor> replica_list;
+    replica_list.reserve(replicas.size());
+    for (const auto& replica : replicas) {
+        replica_list.emplace_back(replica.get_descriptor());
+    }
+
+    // No need to set lease here. The object will not be evicted until
+    // PutEnd is called.
+    metadata_shards_[shard_idx].metadata.emplace(
+        std::piecewise_construct, std::forward_as_tuple(key),
+        std::forward_as_tuple(total_length, std::move(replicas),
+                              config.with_soft_pin));
+    return replica_list;
+}
+
+auto MasterService::MigrateRevoke(const std::string& key, const ReplicateConfig& config)
+    -> tl::expected<void, ErrorCode> {
+    MetadataAccessor accessor(this, key);
+    if (!accessor.Exists()) {
+        LOG(INFO) << "key=" << key << ", info=object_not_found";
+        return tl::make_unexpected(ErrorCode::OBJECT_NOT_FOUND);
+    }
+
+    auto& metadata = accessor.Get();
+    metadata.replicas.erase(
+        std::remove_if(
+            metadata.replicas.begin(), metadata.replicas.end(),
+            [&](const Replica& replica) {
+                return replica.get_descriptor().storage_level ==
+                       config.preferred_storage_level;
+            }),
+        metadata.replicas.end());
+
+    return {};
+}
+
+auto MasterService::MigrateEnd(const std::string& key, 
+                               const ReplicateConfig& config)
+    -> tl::expected<void, ErrorCode> {
+    MetadataAccessor accessor(this, key);
+    if (!accessor.Exists()) {
+        LOG(ERROR) << "key=" << key << ", error=object_not_found";
+        return tl::make_unexpected(ErrorCode::OBJECT_NOT_FOUND);
+    }
+
+    bool target_replica_found = false;
+    auto& metadata = accessor.Get();
+    for (auto& replica : metadata.replicas) {
+        if (replica.get_descriptor().storage_level == config.preferred_storage_level) {
+            replica.mark_complete();
+            target_replica_found = true;
+        }
+    }
+
+    // remove old replicas
+    if (target_replica_found) {
+        metadata.replicas.erase(
+            std::remove_if(
+                metadata.replicas.begin(), metadata.replicas.end(),
+                [&](const Replica& replica) {
+                    return replica.get_descriptor().storage_level !=
+                           config.preferred_storage_level;
+                }
+            ), metadata.replicas.end()
+        );
+    }
+    
+    // for now, just keep it 
+
+    // 1. Set lease timeout to now, indicating that the object has no lease
+    // at beginning. 2. If this object has soft pin enabled, set it to be soft
+    // pinned.
+    metadata.GrantLease(0, default_kv_soft_pin_ttl_);
+    return {};
+}
+
 void MasterService::GCThreadFunc() {
     VLOG(1) << "action=gc_thread_started";
 

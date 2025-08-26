@@ -15,7 +15,7 @@
 DEFINE_string(protocol, "cxl", "Transfer protocol: rdma|tcp|cxl");
 DEFINE_string(device_name, "ibp6s0",
               "Device name to use, valid if protocol=rdma");
-DEFINE_string(transfer_engine_metadata_url, "etcd://10.130.5.131:2379",
+DEFINE_string(transfer_engine_metadata_url, "etcd://10.129.131.15:2379",
               "Metadata connection string for transfer engine");
 DEFINE_uint64(default_kv_lease_ttl, mooncake::DEFAULT_DEFAULT_KV_LEASE_TTL,
               "Default lease time for kv objects, must be set to the "

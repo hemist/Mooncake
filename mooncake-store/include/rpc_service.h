@@ -83,6 +83,17 @@ class WrappedMasterService {
 
     tl::expected<PingResponse, ErrorCode> Ping(
         const UUID& client_id);
+    
+    tl::expected<std::vector<Replica::Descriptor>, ErrorCode> MigrateStart(
+        const std::string& key,
+        const std::vector<uint64_t>& slice_lengths,
+        const ReplicateConfig& config);
+
+    tl::expected<void, ErrorCode> MigrateRevoke(const std::string& key,
+                                                const ReplicateConfig& config);
+
+    tl::expected<void, ErrorCode> MigrateEnd(const std::string& key,
+                                             const ReplicateConfig& config);
 
    private:
     MasterService master_service_;
