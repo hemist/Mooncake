@@ -31,6 +31,10 @@
 #include "transport/transport.h"
 #include "transport/cxl_transport/cxl_transport.h"
 
+#ifdef USE_CXL_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #ifdef USE_CUDA
 #include <bits/stdint-uintn.h>
 #include <cuda_runtime.h>
@@ -82,7 +86,7 @@ DEFINE_string(nic_priority_matrix, "",
 DEFINE_string(segment_id, "192.168.3.76", "Segment ID to access data");
 DEFINE_uint64(buffer_size, 1ull << 30, "total size of data buffer");
 DEFINE_int32(batch_size, 128, "Batch size");
-DEFINE_uint64(block_size, 65536, "Block size for each transfer request");
+DEFINE_uint64(block_size, 16*1024*1024, "Block size for each transfer request");
 DEFINE_int32(duration, 10, "Test duration in seconds");
 DEFINE_int32(threads, 12, "Task submission threads");
 DEFINE_bool(auto_discovery, false, "Enable auto discovery");
@@ -355,6 +359,17 @@ int initiator() {
             name_suffix = i;
         }
         buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, name_prefix + std::to_string(name_suffix));
+    }
+#elif defined(USE_CXL_CUDA)
+    LOG(INFO) << "CXL_CUDA is used, alloc memory on VRAM.";
+    addr.resize(buffer_num);
+    cudaError_t cuda_status;
+    for (int i = 0; i < buffer_num; ++i) {
+        cuda_status = cudaMalloc((void**)&addr[i], FLAGS_buffer_size);
+        if (cuda_status != cudaSuccess) {
+            fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(cuda_status));
+        }
+        buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cuda: " + std::to_string(i));
     }
 #else
     LOG(INFO) << "DRAM is used, numa node num: " << NR_SOCKETS;
