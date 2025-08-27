@@ -86,9 +86,9 @@ DEFINE_string(nic_priority_matrix, "",
 DEFINE_string(segment_id, "192.168.3.76", "Segment ID to access data");
 DEFINE_uint64(buffer_size, 1ull << 30, "total size of data buffer");
 DEFINE_int32(batch_size, 128, "Batch size");
-DEFINE_uint64(block_size, 16*1024*1024, "Block size for each transfer request");
+DEFINE_uint64(block_size, 32*1024*1024, "Block size for each transfer request");
 DEFINE_int32(duration, 10, "Test duration in seconds");
-DEFINE_int32(threads, 12, "Task submission threads");
+DEFINE_int32(threads, 1, "Task submission threads");
 DEFINE_bool(auto_discovery, false, "Enable auto discovery");
 DEFINE_string(report_unit, "GB", "Report unit: GB|GiB|Gb|MB|MiB|Mb|KB|KiB|Kb");
 DEFINE_uint32(report_precision, 2, "Report precision");
@@ -376,6 +376,7 @@ int initiator() {
     addr.resize(buffer_num);
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
+        memset(addr[i], 0, FLAGS_buffer_size);
         buffer_map[FLAGS_protocol].emplace_back(addr[i], FLAGS_buffer_size, "cpu: " + std::to_string(i));
     }
 #endif
