@@ -32,7 +32,10 @@
 #include <fcntl.h>    // For O_RDWR, O_CREAT, etc.
 #include <unistd.h>   // For open(), close(), read(), write()
 #include <sys/mman.h> // For mmap, munmap
+
+#ifdef USE_CXL_DSA
 #include <dml/dml.hpp>
+#endif
 
 #ifdef USE_CXL_CUDA
 #include <cuda_runtime.h>
@@ -109,6 +112,7 @@ size_t CxlTransport::cxlGetDeviceSize() {
     return 0;
 }
 
+#ifdef USE_CXL_DSA
 int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
     auto crc_seed = std::uint32_t(0u);
     char* c_src = static_cast<char*>(src);
@@ -126,14 +130,80 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
         return 0;
     }
     else {
-        LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
+        LOG(ERROR) << "DSA copy failed: " << static_cast<int>(result.status) << std::endl;
         //LOG(INFO) << "DSA copy failed. from " << src << " to " << dest << " len:" << size;
         return -1;
     }
 
     return 0;
 }
+int CxlTransport::execute_copy_crc_slice(void *dest, void *src, size_t size) {
+    const size_t slice_size = 2 * 1024 * 1024; // 64KB
+    const int num_threads = 2;
 
+    if (size < 1) {
+        return -2;
+    }
+
+    char* c_src = static_cast<char*>(src);
+    char* c_dst = static_cast<char*>(dest);
+
+    // 计算总切片数
+    size_t num_slices = (size + slice_size - 1) / slice_size;
+
+    std::vector<int> results(num_slices, 0); // 存储每个切片的处理结果
+    std::mutex results_mutex;
+
+    // 线程工作函数：每个线程负责处理其分配的切片
+    auto thread_work = [&](int thread_id) {
+        // LOG(INFO) << "Multithread DSA copy_crc, thread[" << thread_id <<"].";
+        for (size_t slice_idx = thread_id; slice_idx < num_slices; slice_idx += num_threads) {
+            size_t offset = slice_idx * slice_size;
+            size_t current_size = (slice_idx == num_slices - 1) ? (size - offset) : slice_size;
+
+            if (current_size < 1) {
+                continue; // 跳过空切片
+            }
+
+            auto crc_seed = std::uint32_t(0u); // 每个切片独立计算CRC
+
+            auto result = dml::execute<dml::hardware>(
+                dml::copy_crc,
+                dml::make_view(c_src + offset, current_size),
+                dml::make_view(c_dst + offset, current_size),
+                crc_seed
+            );
+
+            int status = (result.status == dml::status_code::ok) ? 0 : -1;
+
+            // 线程安全地更新结果数组
+            std::lock_guard<std::mutex> lock(results_mutex);
+            results[slice_idx] = status;
+        }
+    };
+
+    // 启动4个线程
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back(thread_work, i);
+    }
+
+    // 等待所有线程完成
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // 检查所有切片是否处理成功
+    for (int status : results) {
+        if (status != 0) {
+            LOG(ERROR) << "DSA copy failed in a slice.";
+            return -1;
+        }
+    }
+
+    return 0;
+}
+#endif
 
 int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     // Input validation
@@ -168,18 +238,20 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
         LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM.";
     }
 #endif
-    // Perform the memory copy
-    if (size < 32768)
-        std::memcpy(dest, src, size);
-    else
-        execute_copy_crc(dest, src, size);
 
+    
+#ifdef USE_CXL_DSA
+    execute_copy_crc_slice(dest, src, size);
+    // execute_copy_crc(dest, src, size);
+#else
+    // Perform the memory copy
+    std::memcpy(dest, src, size);
     // Memory barriers and cache operations
     if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
         // Ensure memory ordering for CXL operations
         __sync_synchronize();
     }
-
+#endif
     return 0; // success
 }
 
@@ -218,6 +290,48 @@ bool CxlTransport::isAddressInCxlRange(void *addr) {
     return (ptr >= base && ptr < end);
 }
 
+#define ALIGNMENT (2 * 1024 * 1024) // devdax 2MB alignment
+void *do_mmap_by_anonymous_fixed(size_t obj_size, int dax_fd, size_t num_dimm, size_t len_dimm) {
+    void *addr_raw;
+    size_t i,j;
+    unsigned long offset, len;
+
+    /* check alignment ??? */
+
+    addr_raw = mmap(NULL, obj_size + ALIGNMENT, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+    if (addr_raw == MAP_FAILED) {
+        printf("Mmap anonymous addr failed.");
+        return NULL;
+    }
+    //memset(addr_raw, 0, obj_size + ALIGNMENT);
+
+    uintptr_t addr_int = (uintptr_t) addr_raw;
+    uintptr_t aligned_addr_int = (addr_int + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+    void * aligned_begin = (void *) aligned_addr_int;
+
+    void *cur_p = aligned_begin;
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+
+    size_t ext_num = (obj_size + ALIGNMENT)/(num_dimm*ALIGNMENT);
+    for (i = 0; i < ext_num; i++) {
+        offset = ALIGNMENT*i;
+        len = ALIGNMENT;
+
+        for(j = 0; j < num_dimm; j++) {
+            void *addr_tmp = mmap(cur_p, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, dax_fd, len_dimm*j + offset);
+            if (addr_tmp == MAP_FAILED) {
+                printf("Mmap1 extents[%ld] { offset(%lu), len(%lu) } failed.%s\n", i, offset, len, strerror(errno));
+                return NULL;
+            }
+            cur_p = (void*)((char*)cur_p + len);
+        }
+    }
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+    return aligned_begin;
+}
+
 int CxlTransport::cxlDevInit()
 {
     int fd = open(cxl_dev_path, O_RDWR);
@@ -226,7 +340,8 @@ int CxlTransport::cxlDevInit()
         return -1;
     }
 
-    void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    // void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void* ptr = do_mmap_by_anonymous_fixed(cxl_dev_size, fd, 2, 137438953472);
     if (ptr == MAP_FAILED) {
         close(fd);
         return ERR_MEMORY;
