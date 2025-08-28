@@ -108,10 +108,16 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     }
     
     // Perform the memory copy
-    if (size < 32768)
+    /*
+    if (size < 32768) {
         std::memcpy(dest, src, size);
-    else
+    } else {
         execute_copy_crc(dest, src, size);
+    }
+        */
+    //LOG(INFO) << "DSA copy 1" << std::endl;
+    execute_copy_crc(dest, src, size);
+    //LOG(INFO) << "DSA copy 2" << std::endl;
 
     // Memory barriers and cache operations
     if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
@@ -157,6 +163,213 @@ bool CxlTransport::isAddressInCxlRange(void *addr) {
     return (ptr >= base && ptr < end);
 }
 
+#define ALIGNMENT (2 * 1024 * 1024) // devdax 2MB alignment
+void *do_mmap_by_anonymous_fixed(size_t obj_size, int dax_fd, size_t num_dimm, size_t len_dimm) {
+    void *addr_raw;
+    size_t i,j;
+    unsigned long offset, len;
+
+    /* check alignment ??? */
+
+    addr_raw = mmap(NULL, obj_size + ALIGNMENT, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+    if (addr_raw == MAP_FAILED) {
+        printf("Mmap anonymous addr failed.");
+        return NULL;
+    }
+    //memset(addr_raw, 0, obj_size + ALIGNMENT);
+
+    uintptr_t addr_int = (uintptr_t) addr_raw;
+    uintptr_t aligned_addr_int = (addr_int + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+    void * aligned_begin = (void *) aligned_addr_int;
+
+    void *cur_p = aligned_begin;
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+
+    size_t ext_num = (obj_size + ALIGNMENT)/(num_dimm*ALIGNMENT);
+    for (i = 0; i < ext_num; i++) {
+        offset = ALIGNMENT*i;
+        len = ALIGNMENT;
+
+        for(j = 0; j < num_dimm; j++) {
+            void *addr_tmp = mmap(cur_p, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, dax_fd, len_dimm*j + offset);
+            if (addr_tmp == MAP_FAILED) {
+                printf("Mmap1 extents[%ld] { offset(%lu), len(%lu) } failed.%s\n", i, offset, len, strerror(errno));
+                return NULL;
+            }
+            cur_p = (void*)((char*)cur_p + len);
+        }
+    }
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+    return aligned_begin;
+}
+
+#include <numa.h>
+#include <numaif.h>
+//#include <cstdint>
+#include <stdint.h>
+#include <errno.h>
+
+#define SIZE1 (16UL * 1024 * 1024 * 1024) // 32GB
+#define SIZE2 (16UL * 1024 * 1024 * 1024) // 32GB
+#define SHM_NAME1 "/my_numa_shm1"
+#define SHM_NAME2 "/my_numa_shm2"
+#define ALIGNMENT (2 * 1024 * 1024) // devdax 2MB alignment
+void *do_dram_mmap_by_anonymous_fixed() {
+    // 1. 创建共享内存对象
+    int fd1 = shm_open(SHM_NAME1, O_CREAT | O_RDWR, 0666);
+    if (fd1 == -1) {
+        perror("shm_open");
+        exit(EXIT_FAILURE);
+    }
+    if (ftruncate(fd1, SIZE1) == -1) {
+        perror("ftruncate");
+        close(fd1);
+        exit(EXIT_FAILURE);
+    }
+    int fd2 = shm_open(SHM_NAME2, O_CREAT | O_RDWR, 0666);
+    if (fd2 == -1) {
+        perror("shm_open");
+        exit(EXIT_FAILURE);
+    }
+    if (ftruncate(fd2, SIZE2) == -1) {
+        perror("ftruncate");
+        close(fd2);
+        exit(EXIT_FAILURE);
+    }
+
+    // 2. 映射内存
+    void *addr1 = mmap(NULL, SIZE1, PROT_READ | PROT_WRITE, MAP_SHARED, fd1, 0);
+    if (addr1 == MAP_FAILED) {
+        perror("mmap");
+        close(fd1);
+        exit(EXIT_FAILURE);
+    }
+    void *addr2 = mmap(NULL, SIZE2, PROT_READ | PROT_WRITE, MAP_SHARED, fd2, 0);
+    if (addr2 == MAP_FAILED) {
+        perror("mmap");
+        close(fd2);
+        exit(EXIT_FAILURE);
+    }
+
+    // 3. 绑定到指定NUMA节点（例如node0）
+    unsigned long nodemask1 = 0x1; // node0的掩码（1 << 0）
+    if (mbind(addr1, SIZE1, MPOL_BIND, &nodemask1, sizeof(nodemask1)*8, MPOL_MF_MOVE | MPOL_MF_STRICT) == -1) {
+        perror("mbind");
+        // 继续执行，但需记录NUMA绑定失败
+    } else {
+        printf("内存已绑定至node0\n");
+    }
+    unsigned long nodemask2 = 0x2; // node0的掩码（1 << 0）
+    if (mbind(addr2, SIZE2, MPOL_BIND, &nodemask2, sizeof(nodemask2)*8, MPOL_MF_MOVE | MPOL_MF_STRICT) == -1) {
+        perror("mbind");
+        // 继续执行，但需记录NUMA绑定失败
+    } else {
+        printf("内存已绑定至node1\n");
+    }
+
+    // 4. 使用内存（示例：填充数据）
+    memset(addr1, 0xAA, SIZE1); // 实际应用中可分块操作
+    memset(addr2, 0xAA, SIZE1); // 实际应用中可分块操作
+
+    /////////////////////////////////////////////////////////////////////////
+    void *addr_raw;
+    size_t i;
+    unsigned long offset, len;
+    size_t obj_size = SIZE1 + SIZE2;
+
+    /* check alignment ??? */
+    addr_raw = mmap(NULL, obj_size + ALIGNMENT, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+    if (addr_raw == MAP_FAILED) {
+        printf("Mmap anonymous addr failed.");
+        return NULL;
+    }
+    //memset(addr_raw, 0, obj_size + ALIGNMENT);
+
+    uintptr_t addr_int = (uintptr_t) addr_raw;
+    uintptr_t aligned_addr_int = (addr_int + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+    void * aligned_begin = (void *) aligned_addr_int;
+
+    void *cur_p = aligned_begin;
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+
+    size_t ext_num = (obj_size + ALIGNMENT)/(2*ALIGNMENT);
+    for (i = 0; i < ext_num; i++) {
+        offset = ALIGNMENT*i;
+        len = ALIGNMENT;
+
+        void *addr_tmp = mmap(cur_p, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd1, offset);
+        if (addr_tmp == MAP_FAILED) {
+            printf("Mmap1 extents[%ld] { offset(%lu), len(%lu) } failed.%s\n", i, offset, len, strerror(errno));
+            return NULL;
+        }
+        cur_p = (void*)((char*)cur_p + len);
+
+        void *addr_tmp2 = mmap(cur_p, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd2, offset);
+        if (addr_tmp2 == MAP_FAILED) {
+            printf("Mmap2 extents[%ld] { offset(%lu), len(%lu) } failed.%s\n", i, offset, len, strerror(errno));
+            return NULL;
+        }
+        cur_p = (void*)((char*)cur_p + len);
+    }
+
+    printf("Anonymous mmap addr: %p\n", aligned_begin);
+    return aligned_begin;
+    /////////////////////////////////////////////////////////////////////////
+    printf("getchar:\n");
+    getchar();
+
+    // 5. 释放资源
+    munmap(addr1, SIZE1);
+    close(fd1);
+    shm_unlink(SHM_NAME1);
+    munmap(addr2, SIZE2);
+    close(fd2);
+    shm_unlink(SHM_NAME2);
+    return 0;
+}
+
+#define SIZE (32UL * 1024 * 1024 * 1024) // 32GB
+#define SHM_NAME "/my_numa_shm11"
+void* do_dram_mmap1() 
+{
+    // 1. 创建共享内存对象
+    int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (fd == -1) {
+        perror("shm_open");
+        exit(EXIT_FAILURE);
+    }
+    if (ftruncate(fd, SIZE) == -1) {
+        perror("ftruncate");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // 2. 映射内存
+    void *addr = mmap(NULL, SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // 3. 绑定到NUMA节点1（关键修改）
+    unsigned long nodemask = 0x1; // node1的掩码（1 << 1）
+    if (mbind(addr, SIZE, MPOL_BIND, &nodemask, sizeof(nodemask)*8, MPOL_MF_MOVE) == -1) {
+        perror("mbind");
+        // 继续执行，但需记录NUMA绑定失败
+    } else {
+        printf("内存已成功绑定至node1\n");
+    }
+
+    // 4. 使用内存（示例：填充数据）
+    memset(addr, 0xAA, SIZE); // 实际应用中可分块操作
+
+    return addr;
+}
+
 int CxlTransport::cxlDevInit()
 {
     int fd = open(cxl_dev_path, O_RDWR);
@@ -165,7 +378,12 @@ int CxlTransport::cxlDevInit()
         return -1;
     }
 
-    void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    //void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0*128*1073741824LL);
+    void* ptr = do_mmap_by_anonymous_fixed(cxl_dev_size, fd, 6, 137438953472);
+    //printf("%ld ptr:%p\n", cxl_dev_size, ptr);
+    //void* ptr = do_dram_mmap_by_anonymous_fixed();
+    //void* ptr = do_dram_mmap1();
+    //void* ptr = numa_alloc_onnode(34359738368, 1);
     if (ptr == MAP_FAILED) {
         close(fd);
         return ERR_MEMORY;

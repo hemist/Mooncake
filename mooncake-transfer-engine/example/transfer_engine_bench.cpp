@@ -80,9 +80,9 @@ DEFINE_string(nic_priority_matrix, "",
               "Path to RDMA NIC priority matrix file (Advanced)");
 
 DEFINE_string(segment_id, "192.168.3.76", "Segment ID to access data");
-DEFINE_uint64(buffer_size, 1ull << 30, "total size of data buffer");
+DEFINE_uint64(buffer_size, 1ull << 35, "total size of data buffer");
 DEFINE_int32(batch_size, 128, "Batch size");
-DEFINE_uint64(block_size, 65536, "Block size for each transfer request");
+DEFINE_uint64(block_size, 16777216, "Block size for each transfer request");
 DEFINE_int32(duration, 10, "Test duration in seconds");
 DEFINE_int32(threads, 12, "Task submission threads");
 DEFINE_bool(auto_discovery, false, "Enable auto discovery");
@@ -185,6 +185,8 @@ std::atomic<size_t> total_batch_count(0);
 Status initiatorWorker(TransferEngine *engine, SegmentID segment_id,
                        int thread_id, void *addr) {
     bindToSocket(thread_id % NR_SOCKETS);
+    //size_t sleep_seconds = thread_id % 3;
+    //std::this_thread::sleep_for(std::chrono::seconds(sleep_seconds));
     TransferRequest::OpCode opcode;
     if (FLAGS_operation == "read")
         opcode = TransferRequest::READ;
@@ -363,6 +365,7 @@ int initiator() {
     addr.resize(buffer_num);
     for (int i = 0; i < buffer_num; ++i) {
         addr[i] = allocateMemoryPool(FLAGS_buffer_size, i, false);
+        memset(addr[i], 0, FLAGS_buffer_size);
         if (FLAGS_protocol != "cxl") {
             int rc = engine->registerLocalMemory(addr[i], FLAGS_buffer_size,
                                                 "cpu:" + std::to_string(i));
