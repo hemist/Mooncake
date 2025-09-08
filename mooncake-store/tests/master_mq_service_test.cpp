@@ -11,12 +11,13 @@ namespace mooncake::test {
     class MasterMqServiceTest : public ::testing::Test { 
        public:
         std::shared_ptr<MasterMQService> master_mq_service = std::make_shared<MasterMQService>();
-        UUID clients[];
+        std::vector<UUID> clients;
        protected:
         void SetUp() override {
             google::InitGoogleLogging("MasterServiceTest");
             FLAGS_logtostderr = true;
 
+            clients.resize(FLAGS_batch_num);
             for (int i = 0; i < FLAGS_batch_num; i++) {
                 clients[i] = generate_uuid();
             }
@@ -49,8 +50,9 @@ TEST_F(MasterMqServiceTest, Bind) {
 TEST_F(MasterMqServiceTest, Base) {
     std::atomic<int> success_count{0};
     std::vector<std::thread> threads;
+    std::unique_ptr<MasterService> service_(new MasterService());
     for (int i = 0; i < FLAGS_batch_num; i++) {
-        threads.push_back(std::thread([this, i, &success_count]() {
+        threads.push_back(std::thread([this, i, &success_count, &service_]() {
 
             std::vector<Replica::Descriptor> replica_list;
 
@@ -59,8 +61,8 @@ TEST_F(MasterMqServiceTest, Base) {
             constexpr size_t size = 1024 * 1024 * 16;
             std::string segment_name = "test_segment_" + std::to_string(i);
 
-            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
-            UUID client_id = mooncake::generate_uuid();
+            UUID client_id = clients[i];
+            Segment segment(client_id, segment_name, buffer, size);
 
             auto mount_result = service_->MountSegment(segment, client_id);
             ASSERT_TRUE(mount_result.has_value());
@@ -139,7 +141,7 @@ TEST_F(MasterMqServiceTest, PushPop) {
             constexpr size_t size = 1024 * 1024 * 16;
             std::string segment_name = "test_segment_" + std::to_string(i);
 
-            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
+            Segment segment(client_id, segment_name, buffer, size);
 
             auto mount_result = service_->MountSegment(segment, client_id);
             ASSERT_TRUE(mount_result.has_value());

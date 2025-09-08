@@ -20,6 +20,8 @@ MasterMetricManager::MasterMetricManager()
                       "Total bytes currently allocated across all segments"),
       total_capacity_("master_total_capacity_bytes",
                       "Total capacity across all mounted segments"),
+      total_dram_capacity_("master_total_dram_capacity_bytes",
+                           "Total dram capacity across all mounted segments"),
       key_count_("master_key_count",
                  "Total number of keys managed by the master"),
       soft_pin_key_count_("master_soft_pin_key_count",
@@ -149,12 +151,23 @@ void MasterMetricManager::dec_total_capacity(int64_t val) {
     total_capacity_.dec(val);
 }
 
+void MasterMetricManager::inc_total_dram_capacity(int64_t val) {
+    total_dram_capacity_.inc(val);
+}
+void MasterMetricManager::dec_total_dram_capacity(int64_t val) {
+    total_dram_capacity_.dec(val);
+}
+
 int64_t MasterMetricManager::get_allocated_size() {
     return allocated_size_.value();
 }
 
 int64_t MasterMetricManager::get_total_capacity() {
     return total_capacity_.value();
+}
+
+int64_t MasterMetricManager::get_total_dram_capacity() {
+    return total_dram_capacity_.value();
 }
 
 double MasterMetricManager::get_global_used_ratio(void) {

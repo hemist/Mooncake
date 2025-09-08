@@ -104,6 +104,8 @@ class ScopedSegmentAccess {
     ErrorCode QuerySegments(const std::string& segment, size_t& used,
                             size_t& capacity);
 
+    ErrorCode GetClientBySegmentName(const std::string& segment_name, UUID& client_id);
+
    private:
     SegmentManager* segment_manager_;
     std::unique_lock<std::shared_mutex> lock_;

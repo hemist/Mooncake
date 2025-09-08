@@ -23,7 +23,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
             segment_manager_->mounted_segments_[segment.id] = {
                 segment, SegmentStatus::OK, allocator};
 
-            MasterMetricManager::instance().inc_total_capacity(size);
+            // MasterMetricManager::instance().inc_total_capacity(size);
 
             return ErrorCode::OK;
         }
@@ -203,6 +203,11 @@ ErrorCode ScopedSegmentAccess::CommitUnmountSegment(
     const size_t& metrics_dec_capacity) {
     // Remove from client_segments_
     bool found_in_client_segments = false;
+
+    auto it = segment_manager_->mounted_segments_.find(segment_id);
+    auto& mounted_segment = it->second;
+    StorageLevel erased_level = mounted_segment.segment.level;
+
     auto client_it = segment_manager_->client_segments_.find(client_id);
     if (client_it != segment_manager_->client_segments_.end()) {
         auto& segments = client_it->second;
@@ -225,7 +230,10 @@ ErrorCode ScopedSegmentAccess::CommitUnmountSegment(
     segment_manager_->mounted_segments_.erase(segment_id);
 
     // Decrease the total capacity
-    MasterMetricManager::instance().dec_total_capacity(metrics_dec_capacity);
+    if (erased_level != StorageLevel::CXL)
+    {
+        MasterMetricManager::instance().dec_total_capacity(metrics_dec_capacity);
+    }
 
     return ErrorCode::OK;
 }
@@ -272,6 +280,28 @@ ErrorCode ScopedSegmentAccess::QuerySegments(const std::string& segment,
         return ErrorCode::SEGMENT_NOT_FOUND;
         }
     return ErrorCode::OK;
+}
+
+ErrorCode ScopedSegmentAccess::GetClientBySegmentName(const std::string& segment_name, UUID& client_id)
+{
+    // 遍历所有client的segments查找匹配的segment_name
+    LOG(WARNING) << "GetClientBySegmentName";
+    for (const auto& client_segments_pair : segment_manager_->client_segments_) {
+        const UUID& current_client_id = client_segments_pair.first;
+        const std::vector<UUID>& client_segment_ids = client_segments_pair.second;
+        
+        // 检查当前client是否拥有目标segment
+        for (const UUID& segment_id : client_segment_ids) {
+            auto segment_it = segment_manager_->mounted_segments_.find(segment_id);
+            if (segment_it != segment_manager_->mounted_segments_.end() && 
+                segment_it->second.segment.name == segment_name) {
+                client_id = current_client_id;
+                return ErrorCode::OK;
+            }
+        }
+    }
+    
+    return ErrorCode::SEGMENT_NOT_FOUND;
 }
 
 ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(ReplicateConfig& config) {

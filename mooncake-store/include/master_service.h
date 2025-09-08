@@ -59,6 +59,96 @@ class MasterService {
         }
     };
 
+    // Internal data structures
+    struct ObjectMetadata {
+        // RAII-style metric management
+        ~ObjectMetadata() {
+            MasterMetricManager::instance().dec_key_count(1);
+            if (soft_pin_timeout) {
+                MasterMetricManager::instance().dec_soft_pin_key_count(1);
+            }
+        }
+
+        ObjectMetadata() = delete;
+
+        ObjectMetadata(size_t value_length, std::vector<Replica>&& reps,
+                       bool enable_soft_pin)
+            : replicas(std::move(reps)),
+              size(value_length),
+              lease_timeout(),
+              soft_pin_timeout(std::nullopt),
+              migrating(false) {
+            MasterMetricManager::instance().inc_key_count(1);
+            if (enable_soft_pin) {
+                soft_pin_timeout.emplace();
+                MasterMetricManager::instance().inc_soft_pin_key_count(1);
+            }
+            MasterMetricManager::instance().observe_value_size(value_length);
+        }
+
+        ObjectMetadata(const ObjectMetadata&) = delete;
+        ObjectMetadata& operator=(const ObjectMetadata&) = delete;
+        ObjectMetadata(ObjectMetadata&&) = delete;
+        ObjectMetadata& operator=(ObjectMetadata&&) = delete;
+
+        std::vector<Replica> replicas;
+        size_t size;
+        // Default constructor, creates a time_point representing
+        // the Clock's epoch (i.e., time_since_epoch() is zero).
+        std::chrono::steady_clock::time_point lease_timeout;  // hard lease
+        std::optional<std::chrono::steady_clock::time_point>
+            soft_pin_timeout;  // optional soft pin, only set for vip objects
+        bool migrating;
+
+        // Check if there are some replicas with a different status than the
+        // given value. If there are, return the status of the first replica
+        // that is not equal to the given value. Otherwise, return false.
+        std::optional<ReplicaStatus> HasDiffRepStatus(
+            ReplicaStatus status) const {
+            for (const auto& replica : replicas) {
+                if (replica.status() != status) {
+                    return replica.status();
+                }
+            }
+            return {};
+        }
+
+        // Grant a lease with timeout as now() + ttl, only update if the new
+        // timeout is larger
+        void GrantLease(const uint64_t ttl, const uint64_t soft_ttl) {
+            std::chrono::steady_clock::time_point now =
+                std::chrono::steady_clock::now();
+            lease_timeout =
+                std::max(lease_timeout, now + std::chrono::milliseconds(ttl));
+            if (soft_pin_timeout) {
+                soft_pin_timeout =
+                    std::max(*soft_pin_timeout,
+                             now + std::chrono::milliseconds(soft_ttl));
+            }
+        }
+
+        // Check if the lease has expired
+        bool IsLeaseExpired() const {
+            return std::chrono::steady_clock::now() >= lease_timeout;
+        }
+
+        // Check if the lease has expired
+        bool IsLeaseExpired(std::chrono::steady_clock::time_point& now) const {
+            return now >= lease_timeout;
+        }
+
+        // Check if is in soft pin status
+        bool IsSoftPinned() const {
+            return soft_pin_timeout &&
+                   std::chrono::steady_clock::now() < *soft_pin_timeout;
+        }
+
+        // Check if is in soft pin status
+        bool IsSoftPinned(std::chrono::steady_clock::time_point& now) const {
+            return soft_pin_timeout && now < *soft_pin_timeout;
+        }
+    };
+
    public:
     MasterService(bool enable_gc = true,
                   uint64_t default_kv_lease_ttl = DEFAULT_DEFAULT_KV_LEASE_TTL,
@@ -277,6 +367,11 @@ class MasterService {
                     const ReplicateConfig& config)
         -> tl::expected<void, ErrorCode>;
 
+    void PushMasterMQ(const std::unordered_map<std::string, ObjectMetadata>::iterator& it);
+    std::shared_ptr<MasterMQService> get_master_mq_service() {
+        return master_mq_service_;
+    }
+
    private:
     // GC thread function
     void GCThreadFunc();
@@ -293,94 +388,6 @@ class MasterService {
 
     // Clear invalid handles in all shards
     void ClearInvalidHandles();
-
-    // Internal data structures
-    struct ObjectMetadata {
-        // RAII-style metric management
-        ~ObjectMetadata() {
-            MasterMetricManager::instance().dec_key_count(1);
-            if (soft_pin_timeout) {
-                MasterMetricManager::instance().dec_soft_pin_key_count(1);
-            }
-        }
-
-        ObjectMetadata() = delete;
-
-        ObjectMetadata(size_t value_length, std::vector<Replica>&& reps,
-                       bool enable_soft_pin)
-            : replicas(std::move(reps)),
-              size(value_length),
-              lease_timeout(),
-              soft_pin_timeout(std::nullopt) {
-            MasterMetricManager::instance().inc_key_count(1);
-            if (enable_soft_pin) {
-                soft_pin_timeout.emplace();
-                MasterMetricManager::instance().inc_soft_pin_key_count(1);
-            }
-            MasterMetricManager::instance().observe_value_size(value_length);
-        }
-
-        ObjectMetadata(const ObjectMetadata&) = delete;
-        ObjectMetadata& operator=(const ObjectMetadata&) = delete;
-        ObjectMetadata(ObjectMetadata&&) = delete;
-        ObjectMetadata& operator=(ObjectMetadata&&) = delete;
-
-        std::vector<Replica> replicas;
-        size_t size;
-        // Default constructor, creates a time_point representing
-        // the Clock's epoch (i.e., time_since_epoch() is zero).
-        std::chrono::steady_clock::time_point lease_timeout;  // hard lease
-        std::optional<std::chrono::steady_clock::time_point>
-            soft_pin_timeout;  // optional soft pin, only set for vip objects
-
-        // Check if there are some replicas with a different status than the
-        // given value. If there are, return the status of the first replica
-        // that is not equal to the given value. Otherwise, return false.
-        std::optional<ReplicaStatus> HasDiffRepStatus(
-            ReplicaStatus status) const {
-            for (const auto& replica : replicas) {
-                if (replica.status() != status) {
-                    return replica.status();
-                }
-            }
-            return {};
-        }
-
-        // Grant a lease with timeout as now() + ttl, only update if the new
-        // timeout is larger
-        void GrantLease(const uint64_t ttl, const uint64_t soft_ttl) {
-            std::chrono::steady_clock::time_point now =
-                std::chrono::steady_clock::now();
-            lease_timeout =
-                std::max(lease_timeout, now + std::chrono::milliseconds(ttl));
-            if (soft_pin_timeout) {
-                soft_pin_timeout =
-                    std::max(*soft_pin_timeout,
-                             now + std::chrono::milliseconds(soft_ttl));
-            }
-        }
-
-        // Check if the lease has expired
-        bool IsLeaseExpired() const {
-            return std::chrono::steady_clock::now() >= lease_timeout;
-        }
-
-        // Check if the lease has expired
-        bool IsLeaseExpired(std::chrono::steady_clock::time_point& now) const {
-            return now >= lease_timeout;
-        }
-
-        // Check if is in soft pin status
-        bool IsSoftPinned() const {
-            return soft_pin_timeout &&
-                   std::chrono::steady_clock::now() < *soft_pin_timeout;
-        }
-
-        // Check if is in soft pin status
-        bool IsSoftPinned(std::chrono::steady_clock::time_point& now) const {
-            return soft_pin_timeout && now < *soft_pin_timeout;
-        }
-    };
 
     static constexpr size_t kNumShards = 1024;  // Number of metadata shards
 
@@ -407,7 +414,7 @@ class MasterService {
     std::atomic<bool> gc_running_{false};
     bool enable_gc_{true};  // Flag to enable/disable garbage collection
     static constexpr uint64_t kGCThreadSleepMs =
-        10;  // 10 ms sleep between GC and eviction checks
+        1000;  // 10 ms sleep between GC and eviction checks
 
     // Lease related members
     const uint64_t default_kv_lease_ttl_;     // in milliseconds

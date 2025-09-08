@@ -41,9 +41,21 @@ Client::Client(const std::string& local_hostname,
       write_thread_pool_(2) {
     client_id_ = generate_uuid();
     LOG(INFO) << "client_id=" << client_id_;
+
+    // Start degrade thread
+    degrade_running_ = true;
+    degrade_thread_ = std::thread(&Client::DegradeThreadFunc, this);
 }
 
 Client::~Client() {
+    // Stop degrade thread
+    if (degrade_running_) {
+        degrade_running_ = false;
+        if (degrade_thread_.joinable()) {
+            degrade_thread_.join();
+        }
+    }
+
     // Make a copy of mounted_segments_ to avoid modifying while iterating
     std::vector<Segment> segments_to_unmount;
     {
@@ -214,6 +226,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
     if (err != ErrorCode::OK) {
         return std::nullopt;
     }
+    client->degrade_running_ = true;
 
     // Initialize storage backend if storage_root_dir is provided
     auto response = client->master_client_.GetFsdir();
@@ -1127,7 +1140,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
     ReplicateConfig client_config = ReplicateConfig{
-        1, false, "", client_id_, static_cast<StorageLevel>(migrate_level)};
+        1, false, local_hostname_, client_id_, static_cast<StorageLevel>(migrate_level)};
 
     
 
@@ -1142,7 +1155,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
         LOG(ERROR) << "Failed to start put operation: " << err;
         return tl::unexpected(err);
     }
-
+    LOG(WARNING) << "Starting Migrate TransferWrite for key=" << msg.key_;
     // Transfer data using allocated handles from all replicas
     for (const auto& replica : start_result.value()) {
         ErrorCode transfer_err = TransferWrite(replica, slices);
@@ -1150,7 +1163,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
             // Revoke put operation
             auto revoke_result = master_client_.MigrateRevoke(msg.key_, client_config);
             if (!revoke_result) {
-                LOG(ERROR) << "Failed to revoke put operation";
+                LOG(ERROR) << "Failed to revoke migrate operation";
                 return tl::unexpected(revoke_result.error());
             }
             return tl::unexpected(transfer_err);
@@ -1361,4 +1374,29 @@ ErrorCode Client::FindFirstCompleteReplica(
     return ErrorCode::INVALID_REPLICA;
 }
 
+void Client::DegradeThreadFunc() {
+    const int kDegradeThreadSleepMs = 1000; // 1 second
+    LOG(WARNING) << "DegradeThreadFunc Runing, client_id:" << client_id_;
+    while (degrade_running_) {
+        // Try to pop a degrade message from master
+        auto result = master_client_.PopMasterMQ(client_id_);
+        if (result) {
+            DegradeMsg msg = result.value();
+            LOG(WARNING) << "Processing degrade task for key: " << msg.key_;
+            
+            // Perform migration
+            auto migrate_result = Migrate(msg);
+            if (!migrate_result) {
+                LOG(ERROR) << "Failed to migrate object with key: " << msg.key_
+                           << ", error: " << toString(migrate_result.error());
+            } else {
+                LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
+            }
+        } else {
+            // No degrade task available, sleep for a while
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kDegradeThreadSleepMs));
+        }
+    }
+}
 }  // namespace mooncake

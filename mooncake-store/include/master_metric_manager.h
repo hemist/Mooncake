@@ -24,8 +24,11 @@ class MasterMetricManager {
     void dec_allocated_size(int64_t val = 1);
     void inc_total_capacity(int64_t val = 1);
     void dec_total_capacity(int64_t val = 1);
+    void inc_total_dram_capacity(int64_t val = 1);
+    void dec_total_dram_capacity(int64_t val = 1);
     int64_t get_allocated_size();
     int64_t get_total_capacity();
+    int64_t get_total_dram_capacity();
     double get_global_used_ratio(void);
 
     // Key/Value Metrics
@@ -163,6 +166,7 @@ class MasterMetricManager {
     // Storage Metrics
     ylt::metric::gauge_t allocated_size_;  // Use update for gauge
     ylt::metric::gauge_t total_capacity_;  // Use update for gauge
+    ylt::metric::gauge_t total_dram_capacity_;  // Use update for gauge
 
     // Key/Value Metrics
     ylt::metric::gauge_t key_count_;

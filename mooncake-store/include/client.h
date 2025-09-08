@@ -304,6 +304,11 @@ class Client {
 
     // Store Level
     std::unordered_map<StorageLevel, std::string> level_protocols_;
+
+    // Degrade thread
+    std::thread degrade_thread_;
+    std::atomic<bool> degrade_running_;
+    void DegradeThreadFunc();
 };
 
 }  // namespace mooncake

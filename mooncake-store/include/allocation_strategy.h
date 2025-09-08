@@ -165,7 +165,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
     std::unique_ptr<AllocatedBuffer> CxlOffsetAllocate(
         const std::shared_ptr<BufferAllocatorBase>& cxl_global_allocator,
         size_t size, const ReplicateConfig& config) {
-        
+        LOG(WARNING) << "CxlOffsetAllocate";
         if (!cxl_global_allocator || size == 0) {
             return nullptr;
         }
@@ -184,7 +184,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
         const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
             allocators_by_name, 
         size_t objectSize, const ReplicateConfig& config) {
-
+        LOG(WARNING) << "TryPreferredAllocate";
         if (config.preferred_segment.empty()) {
             return nullptr;
         }

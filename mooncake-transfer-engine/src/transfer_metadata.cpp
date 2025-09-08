@@ -408,12 +408,15 @@ std::shared_ptr<TransferMetadata::SegmentDesc> TransferMetadata::getSegmentDesc(
             return nullptr;
         }
     } else {
+        LOG(INFO) << "Retrieving segment descriptor, name " << getFullMetadataKey(segment_name);
         if (!storage_plugin_->get(getFullMetadataKey(segment_name),
                                   peer_json)) {
             // LOG(WARNING) << "Failed to retrieve segment descriptor, name " << segment_name;
             return nullptr;
         }
     }
+
+    LOG(INFO) << "peer json" << peer_json;
 
     return decodeSegmentDesc(peer_json, segment_name);
 }

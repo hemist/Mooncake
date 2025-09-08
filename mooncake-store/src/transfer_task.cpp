@@ -469,6 +469,8 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         const auto& handle = handles[i];
         const auto& slice = slices[i];
 
+        LOG(INFO) << "TransferTask protocol: " << proto << ", segment name: " << handle.segment_name_;
+
         Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
         if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
             LOG(ERROR) << "Failed to open segment " << handle.segment_name_;

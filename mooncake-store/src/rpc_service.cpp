@@ -34,7 +34,7 @@ WrappedMasterService::WrappedMasterService(
                       allow_evict_soft_pinned_objects, eviction_ratio,
                       eviction_high_watermark_ratio, view_version,
                       client_live_ttl_sec, enable_ha, cluster_id, memory_allocator, enable_cxl),
-      master_mq_service_(std::make_shared<MasterMQService>()),
+      master_mq_service_(master_service_.get_master_mq_service()),
       http_server_(4, http_port),
       metric_report_running_(enable_metric_reporting) {
     init_http_server();
@@ -502,11 +502,12 @@ tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID
     DegradeMsg msg;
     int ret = master_mq_service_->pop(client_id, msg);
     if (ret != 0) {
+        LOG(ERROR) << "Failed to pop from master mq";
         return tl::unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
     }
+    LOG(ERROR) << "Pop from master mq: " << msg.key_;
     return msg;
 }
-
 
 
 void RegisterRpcService(
@@ -550,6 +551,8 @@ void RegisterRpcService(
     server.register_handler<&mooncake::WrappedMasterService::MigrateStart>(
         &wrapped_master_service);
     server.register_handler<&mooncake::WrappedMasterService::MigrateEnd>(
+        &wrapped_master_service);
+    server.register_handler<&mooncake::WrappedMasterService::PopMasterMQ>(
         &wrapped_master_service);
 }
 

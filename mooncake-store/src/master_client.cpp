@@ -630,7 +630,7 @@ MasterClient::MigrateStart(const std::string& key,
         rpc_slice_lengths.push_back(length);
     }
 
-    auto request_result = client->send_request<&WrappedMasterService::PutStart>(
+    auto request_result = client->send_request<&WrappedMasterService::MigrateStart>(
         key, rpc_slice_lengths, config);
     auto result = coro::syncAwait(
         [&]() -> coro::Lazy<
@@ -704,7 +704,7 @@ tl::expected<void, ErrorCode> MasterClient::MigrateEnd(const std::string& key,
 }
 tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client_id) {
     ScopedVLogTimer timer(1, "MasterClient::PeakMasterMQ");
-
+    // LOG(WARNING) << "MasterClient::PopMasterMQ, client_id:" << client_id;
     auto client = client_accessor_.GetClient();
     if (!client) {
         LOG(ERROR) << "Client not available";
@@ -717,10 +717,11 @@ tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client
         coro::syncAwait([&]() -> coro::Lazy<tl::expected<DegradeMsg, ErrorCode>> {
             auto result = co_await co_await request_result;
             if (!result) {
-                LOG(ERROR) << "Failed to pop master MQ operation: "
-                           << result.error().msg;
+                // LOG(ERROR) << "Failed to pop master MQ operation: "
+                //            << result.error().msg;
                 co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
             }
+            LOG(WARNING) << "MasterClient::PopMasterMQ, get result, client_id:" << client_id;
             co_return result->result();
         }());
     timer.LogResponseExpected(result);

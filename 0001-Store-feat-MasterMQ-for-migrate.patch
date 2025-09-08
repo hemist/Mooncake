@@ -1,0 +1,898 @@
+From 77b2ab0d83b05765676ccb9bb5272e5910a89e88 Mon Sep 17 00:00:00 2001
+From: Karl Zhao <zhaozhiyuan05@ieisystem.com>
+Date: Thu, 4 Sep 2025 10:10:39 +0800
+Subject: [PATCH] [Store] feat: MasterMQ for migrate
+
+---
+ mooncake-store/include/allocation_strategy.h  |   4 +-
+ mooncake-store/include/client.h               |   5 +
+ mooncake-store/include/ha_helper.h            |   2 +-
+ .../include/master_metric_manager.h           |   4 +
+ mooncake-store/include/master_service.h       | 185 +++++++++---------
+ mooncake-store/include/segment.h              |   2 +
+ mooncake-store/src/client.cpp                 |  42 +++-
+ mooncake-store/src/ha_helper.cpp              |   6 +-
+ mooncake-store/src/master_client.cpp          |   9 +-
+ mooncake-store/src/master_metric_manager.cpp  |  13 ++
+ mooncake-store/src/master_mq_service.cpp      |   3 +
+ mooncake-store/src/master_service.cpp         | 101 ++++++----
+ mooncake-store/src/rpc_service.cpp            |   7 +-
+ mooncake-store/src/segment.cpp                |  34 +++-
+ .../tests/master_mq_service_test.cpp          |  12 +-
+ 15 files changed, 286 insertions(+), 143 deletions(-)
+
+diff --git a/mooncake-store/include/allocation_strategy.h b/mooncake-store/include/allocation_strategy.h
+index 1288c11..a265e8f 100644
+--- a/mooncake-store/include/allocation_strategy.h
++++ b/mooncake-store/include/allocation_strategy.h
+@@ -165,7 +165,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
+     std::unique_ptr<AllocatedBuffer> CxlOffsetAllocate(
+         const std::shared_ptr<BufferAllocatorBase>& cxl_global_allocator,
+         size_t size, const ReplicateConfig& config) {
+-        
++        LOG(WARNING) << "CxlOffsetAllocate";
+         if (!cxl_global_allocator || size == 0) {
+             return nullptr;
+         }
+@@ -184,7 +184,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
+         const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
+             allocators_by_name, 
+         size_t objectSize, const ReplicateConfig& config) {
+-
++        LOG(WARNING) << "TryPreferredAllocate";
+         if (config.preferred_segment.empty()) {
+             return nullptr;
+         }
+diff --git a/mooncake-store/include/client.h b/mooncake-store/include/client.h
+index 0967621..bea7956 100644
+--- a/mooncake-store/include/client.h
++++ b/mooncake-store/include/client.h
+@@ -304,6 +304,11 @@ class Client {
+ 
+     // Store Level
+     std::unordered_map<StorageLevel, std::string> level_protocols_;
++
++    // Degrade thread
++    std::thread degrade_thread_;
++    std::atomic<bool> degrade_running_;
++    void DegradeThreadFunc();
+ };
+ 
+ }  // namespace mooncake
+\ No newline at end of file
+diff --git a/mooncake-store/include/ha_helper.h b/mooncake-store/include/ha_helper.h
+index 2be2019..9e71bbf 100644
+--- a/mooncake-store/include/ha_helper.h
++++ b/mooncake-store/include/ha_helper.h
+@@ -106,7 +106,7 @@ class MasterServiceSupervisor {
+     double eviction_ratio_;
+     double eviction_high_watermark_ratio_;
+     int64_t client_live_ttl_sec_;
+-    bool enable_cxl;
++    bool enable_cxl_;
+ 
+     // RPC server configuration parameters
+     const int rpc_port_;
+diff --git a/mooncake-store/include/master_metric_manager.h b/mooncake-store/include/master_metric_manager.h
+index 38df076..e5752d9 100644
+--- a/mooncake-store/include/master_metric_manager.h
++++ b/mooncake-store/include/master_metric_manager.h
+@@ -24,8 +24,11 @@ class MasterMetricManager {
+     void dec_allocated_size(int64_t val = 1);
+     void inc_total_capacity(int64_t val = 1);
+     void dec_total_capacity(int64_t val = 1);
++    void inc_total_dram_capacity(int64_t val = 1);
++    void dec_total_dram_capacity(int64_t val = 1);
+     int64_t get_allocated_size();
+     int64_t get_total_capacity();
++    int64_t get_total_dram_capacity();
+     double get_global_used_ratio(void);
+ 
+     // Key/Value Metrics
+@@ -163,6 +166,7 @@ class MasterMetricManager {
+     // Storage Metrics
+     ylt::metric::gauge_t allocated_size_;  // Use update for gauge
+     ylt::metric::gauge_t total_capacity_;  // Use update for gauge
++    ylt::metric::gauge_t total_dram_capacity_;  // Use update for gauge
+ 
+     // Key/Value Metrics
+     ylt::metric::gauge_t key_count_;
+diff --git a/mooncake-store/include/master_service.h b/mooncake-store/include/master_service.h
+index 0652c2a..b1c97e6 100644
+--- a/mooncake-store/include/master_service.h
++++ b/mooncake-store/include/master_service.h
+@@ -59,6 +59,96 @@ class MasterService {
+         }
+     };
+ 
++    // Internal data structures
++    struct ObjectMetadata {
++        // RAII-style metric management
++        ~ObjectMetadata() {
++            MasterMetricManager::instance().dec_key_count(1);
++            if (soft_pin_timeout) {
++                MasterMetricManager::instance().dec_soft_pin_key_count(1);
++            }
++        }
++
++        ObjectMetadata() = delete;
++
++        ObjectMetadata(size_t value_length, std::vector<Replica>&& reps,
++                       bool enable_soft_pin)
++            : replicas(std::move(reps)),
++              size(value_length),
++              lease_timeout(),
++              soft_pin_timeout(std::nullopt),
++              migrating(false) {
++            MasterMetricManager::instance().inc_key_count(1);
++            if (enable_soft_pin) {
++                soft_pin_timeout.emplace();
++                MasterMetricManager::instance().inc_soft_pin_key_count(1);
++            }
++            MasterMetricManager::instance().observe_value_size(value_length);
++        }
++
++        ObjectMetadata(const ObjectMetadata&) = delete;
++        ObjectMetadata& operator=(const ObjectMetadata&) = delete;
++        ObjectMetadata(ObjectMetadata&&) = delete;
++        ObjectMetadata& operator=(ObjectMetadata&&) = delete;
++
++        std::vector<Replica> replicas;
++        size_t size;
++        // Default constructor, creates a time_point representing
++        // the Clock's epoch (i.e., time_since_epoch() is zero).
++        std::chrono::steady_clock::time_point lease_timeout;  // hard lease
++        std::optional<std::chrono::steady_clock::time_point>
++            soft_pin_timeout;  // optional soft pin, only set for vip objects
++        bool migrating;
++
++        // Check if there are some replicas with a different status than the
++        // given value. If there are, return the status of the first replica
++        // that is not equal to the given value. Otherwise, return false.
++        std::optional<ReplicaStatus> HasDiffRepStatus(
++            ReplicaStatus status) const {
++            for (const auto& replica : replicas) {
++                if (replica.status() != status) {
++                    return replica.status();
++                }
++            }
++            return {};
++        }
++
++        // Grant a lease with timeout as now() + ttl, only update if the new
++        // timeout is larger
++        void GrantLease(const uint64_t ttl, const uint64_t soft_ttl) {
++            std::chrono::steady_clock::time_point now =
++                std::chrono::steady_clock::now();
++            lease_timeout =
++                std::max(lease_timeout, now + std::chrono::milliseconds(ttl));
++            if (soft_pin_timeout) {
++                soft_pin_timeout =
++                    std::max(*soft_pin_timeout,
++                             now + std::chrono::milliseconds(soft_ttl));
++            }
++        }
++
++        // Check if the lease has expired
++        bool IsLeaseExpired() const {
++            return std::chrono::steady_clock::now() >= lease_timeout;
++        }
++
++        // Check if the lease has expired
++        bool IsLeaseExpired(std::chrono::steady_clock::time_point& now) const {
++            return now >= lease_timeout;
++        }
++
++        // Check if is in soft pin status
++        bool IsSoftPinned() const {
++            return soft_pin_timeout &&
++                   std::chrono::steady_clock::now() < *soft_pin_timeout;
++        }
++
++        // Check if is in soft pin status
++        bool IsSoftPinned(std::chrono::steady_clock::time_point& now) const {
++            return soft_pin_timeout && now < *soft_pin_timeout;
++        }
++    };
++
+    public:
+     MasterService(bool enable_gc = true,
+                   uint64_t default_kv_lease_ttl = DEFAULT_DEFAULT_KV_LEASE_TTL,
+@@ -277,6 +367,11 @@ class MasterService {
+                     const ReplicateConfig& config)
+         -> tl::expected<void, ErrorCode>;
+ 
++    void PushMasterMQ(const std::unordered_map<std::string, ObjectMetadata>::iterator& it);
++    std::shared_ptr<MasterMQService> get_master_mq_service() {
++        return master_mq_service_;
++    }
++
+    private:
+     // GC thread function
+     void GCThreadFunc();
+@@ -294,94 +389,6 @@ class MasterService {
+     // Clear invalid handles in all shards
+     void ClearInvalidHandles();
+ 
+-    // Internal data structures
+-    struct ObjectMetadata {
+-        // RAII-style metric management
+-        ~ObjectMetadata() {
+-            MasterMetricManager::instance().dec_key_count(1);
+-            if (soft_pin_timeout) {
+-                MasterMetricManager::instance().dec_soft_pin_key_count(1);
+-            }
+-        }
+-
+-        ObjectMetadata() = delete;
+-
+-        ObjectMetadata(size_t value_length, std::vector<Replica>&& reps,
+-                       bool enable_soft_pin)
+-            : replicas(std::move(reps)),
+-              size(value_length),
+-              lease_timeout(),
+-              soft_pin_timeout(std::nullopt) {
+-            MasterMetricManager::instance().inc_key_count(1);
+-            if (enable_soft_pin) {
+-                soft_pin_timeout.emplace();
+-                MasterMetricManager::instance().inc_soft_pin_key_count(1);
+-            }
+-            MasterMetricManager::instance().observe_value_size(value_length);
+-        }
+-
+-        ObjectMetadata(const ObjectMetadata&) = delete;
+-        ObjectMetadata& operator=(const ObjectMetadata&) = delete;
+-        ObjectMetadata(ObjectMetadata&&) = delete;
+-        ObjectMetadata& operator=(ObjectMetadata&&) = delete;
+-
+-        std::vector<Replica> replicas;
+-        size_t size;
+-        // Default constructor, creates a time_point representing
+-        // the Clock's epoch (i.e., time_since_epoch() is zero).
+-        std::chrono::steady_clock::time_point lease_timeout;  // hard lease
+-        std::optional<std::chrono::steady_clock::time_point>
+-            soft_pin_timeout;  // optional soft pin, only set for vip objects
+-
+-        // Check if there are some replicas with a different status than the
+-        // given value. If there are, return the status of the first replica
+-        // that is not equal to the given value. Otherwise, return false.
+-        std::optional<ReplicaStatus> HasDiffRepStatus(
+-            ReplicaStatus status) const {
+-            for (const auto& replica : replicas) {
+-                if (replica.status() != status) {
+-                    return replica.status();
+-                }
+-            }
+-            return {};
+-        }
+-
+-        // Grant a lease with timeout as now() + ttl, only update if the new
+-        // timeout is larger
+-        void GrantLease(const uint64_t ttl, const uint64_t soft_ttl) {
+-            std::chrono::steady_clock::time_point now =
+-                std::chrono::steady_clock::now();
+-            lease_timeout =
+-                std::max(lease_timeout, now + std::chrono::milliseconds(ttl));
+-            if (soft_pin_timeout) {
+-                soft_pin_timeout =
+-                    std::max(*soft_pin_timeout,
+-                             now + std::chrono::milliseconds(soft_ttl));
+-            }
+-        }
+-
+-        // Check if the lease has expired
+-        bool IsLeaseExpired() const {
+-            return std::chrono::steady_clock::now() >= lease_timeout;
+-        }
+-
+-        // Check if the lease has expired
+-        bool IsLeaseExpired(std::chrono::steady_clock::time_point& now) const {
+-            return now >= lease_timeout;
+-        }
+-
+-        // Check if is in soft pin status
+-        bool IsSoftPinned() const {
+-            return soft_pin_timeout &&
+-                   std::chrono::steady_clock::now() < *soft_pin_timeout;
+-        }
+-
+-        // Check if is in soft pin status
+-        bool IsSoftPinned(std::chrono::steady_clock::time_point& now) const {
+-            return soft_pin_timeout && now < *soft_pin_timeout;
+-        }
+-    };
+-
+     static constexpr size_t kNumShards = 1024;  // Number of metadata shards
+ 
+     // Sharded metadata maps and their mutexes
+@@ -407,7 +414,7 @@ class MasterService {
+     std::atomic<bool> gc_running_{false};
+     bool enable_gc_{true};  // Flag to enable/disable garbage collection
+     static constexpr uint64_t kGCThreadSleepMs =
+-        10;  // 10 ms sleep between GC and eviction checks
++        1000;  // 10 ms sleep between GC and eviction checks
+ 
+     // Lease related members
+     const uint64_t default_kv_lease_ttl_;     // in milliseconds
+diff --git a/mooncake-store/include/segment.h b/mooncake-store/include/segment.h
+index c674b13..a600107 100644
+--- a/mooncake-store/include/segment.h
++++ b/mooncake-store/include/segment.h
+@@ -104,6 +104,8 @@ class ScopedSegmentAccess {
+     ErrorCode QuerySegments(const std::string& segment, size_t& used,
+                             size_t& capacity);
+ 
++    ErrorCode GetClientBySegmentName(const std::string& segment_name, UUID& client_id);
++
+    private:
+     SegmentManager* segment_manager_;
+     std::unique_lock<std::shared_mutex> lock_;
+diff --git a/mooncake-store/src/client.cpp b/mooncake-store/src/client.cpp
+index 234b4d4..75cc259 100644
+--- a/mooncake-store/src/client.cpp
++++ b/mooncake-store/src/client.cpp
+@@ -41,9 +41,21 @@ Client::Client(const std::string& local_hostname,
+       write_thread_pool_(2) {
+     client_id_ = generate_uuid();
+     LOG(INFO) << "client_id=" << client_id_;
++
++    // Start degrade thread
++    degrade_running_ = true;
++    degrade_thread_ = std::thread(&Client::DegradeThreadFunc, this);
+ }
+ 
+ Client::~Client() {
++    // Stop degrade thread
++    if (degrade_running_) {
++        degrade_running_ = false;
++        if (degrade_thread_.joinable()) {
++            degrade_thread_.join();
++        }
++    }
++
+     // Make a copy of mounted_segments_ to avoid modifying while iterating
+     std::vector<Segment> segments_to_unmount;
+     {
+@@ -214,6 +226,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
+     if (err != ErrorCode::OK) {
+         return std::nullopt;
+     }
++    client->degrade_running_ = true;
+ 
+     // Initialize storage backend if storage_root_dir is provided
+     auto response = client->master_client_.GetFsdir();
+@@ -1142,7 +1155,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
+         LOG(ERROR) << "Failed to start put operation: " << err;
+         return tl::unexpected(err);
+     }
+-
++    LOG(WARNING) << "Starting Migrate TransferWrite for key=" << msg.key_;
+     // Transfer data using allocated handles from all replicas
+     for (const auto& replica : start_result.value()) {
+         ErrorCode transfer_err = TransferWrite(replica, slices);
+@@ -1150,7 +1163,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
+             // Revoke put operation
+             auto revoke_result = master_client_.MigrateRevoke(msg.key_, client_config);
+             if (!revoke_result) {
+-                LOG(ERROR) << "Failed to revoke put operation";
++                LOG(ERROR) << "Failed to revoke migrate operation";
+                 return tl::unexpected(revoke_result.error());
+             }
+             return tl::unexpected(transfer_err);
+@@ -1361,4 +1374,29 @@ ErrorCode Client::FindFirstCompleteReplica(
+     return ErrorCode::INVALID_REPLICA;
+ }
+ 
++void Client::DegradeThreadFunc() {
++    const int kDegradeThreadSleepMs = 1000; // 1 second
++    LOG(WARNING) << "DegradeThreadFunc Runing, client_id:" << client_id_;
++    while (degrade_running_) {
++        // Try to pop a degrade message from master
++        auto result = master_client_.PopMasterMQ(client_id_);
++        if (result) {
++            DegradeMsg msg = result.value();
++            LOG(WARNING) << "Processing degrade task for key: " << msg.key_;
++            
++            // Perform migration
++            auto migrate_result = Migrate(msg);
++            if (!migrate_result) {
++                LOG(ERROR) << "Failed to migrate object with key: " << msg.key_
++                           << ", error: " << toString(migrate_result.error());
++            } else {
++                LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
++            }
++        } else {
++            // No degrade task available, sleep for a while
++            std::this_thread::sleep_for(
++                std::chrono::milliseconds(kDegradeThreadSleepMs));
++        }
++    }
++}
+ }  // namespace mooncake
+diff --git a/mooncake-store/src/ha_helper.cpp b/mooncake-store/src/ha_helper.cpp
+index 5e12ec6..05e2d7e 100644
+--- a/mooncake-store/src/ha_helper.cpp
++++ b/mooncake-store/src/ha_helper.cpp
+@@ -111,6 +111,7 @@ MasterServiceSupervisor::MasterServiceSupervisor(
+       eviction_ratio_(eviction_ratio),
+       eviction_high_watermark_ratio_(eviction_high_watermark_ratio),
+       client_live_ttl_sec_(client_live_ttl_sec),
++      enable_cxl_(enable_cxl),
+       rpc_port_(rpc_port),
+       rpc_thread_num_(rpc_thread_num > 0 ? rpc_thread_num
+                                          : std::thread::hardware_concurrency()),
+@@ -120,8 +121,7 @@ MasterServiceSupervisor::MasterServiceSupervisor(
+       etcd_endpoints_(etcd_endpoints),
+       local_hostname_(local_hostname),
+       cluster_id_(cluster_id),
+-      memory_allocator_(memory_allocator),
+-      enable_cxl(enable_cxl) {}
++      memory_allocator_(memory_allocator) {}
+ 
+ int MasterServiceSupervisor::Start() {
+     while (true) {
+@@ -161,7 +161,7 @@ int MasterServiceSupervisor::Start() {
+             allow_evict_soft_pinned_objects_, enable_metric_reporting_,
+             metrics_port_, eviction_ratio_, eviction_high_watermark_ratio_,
+             version, client_live_ttl_sec_, enable_ha, cluster_id_,
+-            memory_allocator_, enable_cxl);
++            memory_allocator_, enable_cxl_);
+         mooncake::RegisterRpcService(server, wrapped_master_service);
+         // Metric reporting is now handled by WrappedMasterService.
+ 
+diff --git a/mooncake-store/src/master_client.cpp b/mooncake-store/src/master_client.cpp
+index b38601c..f07fe45 100644
+--- a/mooncake-store/src/master_client.cpp
++++ b/mooncake-store/src/master_client.cpp
+@@ -630,7 +630,7 @@ MasterClient::MigrateStart(const std::string& key,
+         rpc_slice_lengths.push_back(length);
+     }
+ 
+-    auto request_result = client->send_request<&WrappedMasterService::PutStart>(
++    auto request_result = client->send_request<&WrappedMasterService::MigrateStart>(
+         key, rpc_slice_lengths, config);
+     auto result = coro::syncAwait(
+         [&]() -> coro::Lazy<
+@@ -704,7 +704,7 @@ tl::expected<void, ErrorCode> MasterClient::MigrateEnd(const std::string& key,
+ }
+ tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client_id) {
+     ScopedVLogTimer timer(1, "MasterClient::PeakMasterMQ");
+-
++    // LOG(WARNING) << "MasterClient::PopMasterMQ, client_id:" << client_id;
+     auto client = client_accessor_.GetClient();
+     if (!client) {
+         LOG(ERROR) << "Client not available";
+@@ -717,10 +717,11 @@ tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client
+         coro::syncAwait([&]() -> coro::Lazy<tl::expected<DegradeMsg, ErrorCode>> {
+             auto result = co_await co_await request_result;
+             if (!result) {
+-                LOG(ERROR) << "Failed to pop master MQ operation: "
+-                           << result.error().msg;
++                // LOG(ERROR) << "Failed to pop master MQ operation: "
++                //            << result.error().msg;
+                 co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+             }
++            LOG(WARNING) << "MasterClient::PopMasterMQ, get result, client_id:" << client_id;
+             co_return result->result();
+         }());
+     timer.LogResponseExpected(result);
+diff --git a/mooncake-store/src/master_metric_manager.cpp b/mooncake-store/src/master_metric_manager.cpp
+index d2b6781..7a3e01e 100644
+--- a/mooncake-store/src/master_metric_manager.cpp
++++ b/mooncake-store/src/master_metric_manager.cpp
+@@ -20,6 +20,8 @@ MasterMetricManager::MasterMetricManager()
+                       "Total bytes currently allocated across all segments"),
+       total_capacity_("master_total_capacity_bytes",
+                       "Total capacity across all mounted segments"),
++      total_dram_capacity_("master_total_dram_capacity_bytes",
++                           "Total dram capacity across all mounted segments"),
+       key_count_("master_key_count",
+                  "Total number of keys managed by the master"),
+       soft_pin_key_count_("master_soft_pin_key_count",
+@@ -149,6 +151,13 @@ void MasterMetricManager::dec_total_capacity(int64_t val) {
+     total_capacity_.dec(val);
+ }
+ 
++void MasterMetricManager::inc_total_dram_capacity(int64_t val) {
++    total_dram_capacity_.inc(val);
++}
++void MasterMetricManager::dec_total_dram_capacity(int64_t val) {
++    total_dram_capacity_.dec(val);
++}
++
+ int64_t MasterMetricManager::get_allocated_size() {
+     return allocated_size_.value();
+ }
+@@ -157,6 +166,10 @@ int64_t MasterMetricManager::get_total_capacity() {
+     return total_capacity_.value();
+ }
+ 
++int64_t MasterMetricManager::get_total_dram_capacity() {
++    return total_dram_capacity_.value();
++}
++
+ double MasterMetricManager::get_global_used_ratio(void) {
+     double allocated = allocated_size_.value();
+     double capacity = total_capacity_.value();
+diff --git a/mooncake-store/src/master_mq_service.cpp b/mooncake-store/src/master_mq_service.cpp
+index ba1e33c..76ed52f 100644
+--- a/mooncake-store/src/master_mq_service.cpp
++++ b/mooncake-store/src/master_mq_service.cpp
+@@ -15,13 +15,16 @@ int MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
+         return -1;
+     }
+     std::unique_lock lock(mu_);
++    LOG(ERROR) << "MasterMQService::push instance: " << this << " >>, degraed_mq_.size: " << degraed_mq_.size();
+     degraed_mq_[client_id].push(msg);
++    LOG(ERROR) << "MasterMQService::push instance: " << this << " <<, degraed_mq_.size: " << degraed_mq_.size();
+     return 0;
+ }
+ 
+ int MasterMQService::pop(const UUID& client_id, DegradeMsg &msg) {
+     std::unique_lock lock(mu_);
+     auto it = degraed_mq_.find(client_id);
++    LOG(ERROR) << "MasterMQService::pop instance: " << this << " , degraed_mq_.size: " << degraed_mq_.size();
+     if (it == degraed_mq_.end() || it->second.empty()) {
+         // LOG(ERROR) << "Client id is not found";
+         return -1;
+diff --git a/mooncake-store/src/master_service.cpp b/mooncake-store/src/master_service.cpp
+index f9b7631..d99f63a 100644
+--- a/mooncake-store/src/master_service.cpp
++++ b/mooncake-store/src/master_service.cpp
+@@ -32,8 +32,8 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
+       enable_ha_(enable_ha),
+       cluster_id_(cluster_id),
+       segment_manager_(memory_allocator, enable_cxl),
+-      master_mq_service_(std::make_shared<MasterMQService>()),
+-      enable_cxl_(enable_cxl) {
++      enable_cxl_(enable_cxl),
++      master_mq_service_(std::make_shared<MasterMQService>()) {
+     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
+         LOG(ERROR) << "Eviction ratio must be between 0.0 and 1.0, "
+                    << "current value: " << eviction_ratio_;
+@@ -119,6 +119,8 @@ auto MasterService::MountSegment(const Segment& segment, const UUID& client_id)
+     } else if (err != ErrorCode::OK) {
+         return tl::make_unexpected(err);
+     }
++    // Bind client to master message queue
++    master_mq_service_->bind(client_id);
+     return {};
+ }
+ 
+@@ -164,7 +166,7 @@ auto MasterService::ReMountSegment(const std::vector<Segment>& segments,
+     if (err != ErrorCode::OK) {
+         return tl::make_unexpected(err);
+     }
+-
++    master_mq_service_->bind(client_id);
+     // Change the client status to OK
+     ok_client_.insert(client_id);
+     MasterMetricManager::instance().inc_active_clients();
+@@ -226,6 +228,7 @@ auto MasterService::UnmountSegment(const UUID& segment_id,
+     if (err != ErrorCode::OK) {
+         return tl::make_unexpected(err);
+     }
++    master_mq_service_->clear(client_id);
+     return {};
+ }
+ 
+@@ -659,27 +662,26 @@ auto MasterService::MigrateStart(const std::string& key,
+ 
+     VLOG(1) << "key=" << key << ", value_length=" << total_length
+             << ", slice_count=" << slice_lengths.size() << ", config=" << config
+-            << ", action=put_start_begin";
+-
+-    // Lock the shard and check if object already exists
+-    size_t shard_idx = getShardIndex(key);
+-    MutexLocker lock(&metadata_shards_[shard_idx].mutex);
++            << ", action=migrate_start_begin";
+ 
+-    auto it = metadata_shards_[shard_idx].metadata.find(key);
+-    if (it != metadata_shards_[shard_idx].metadata.end() &&
+-        !CleanupStaleHandles(it->second)) {
+-        LOG(INFO) << "key=" << key << ", info=object_already_exists";
+-        return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
++    MetadataAccessor accessor(this, key);
++    if (!accessor.Exists()) {
++        LOG(ERROR) << "key=" << key << ", error=object_not_found";
++        return tl::make_unexpected(ErrorCode::OBJECT_NOT_FOUND);
+     }
++    auto& existing_metadata = accessor.Get();
+ 
++    LOG(WARNING) << "ScopedSegmentAllocatorAccess >>";
+     ScopedSegmentAllocatorAccess segment_allocator_access = segment_manager_.getAllocatorAccess();
+-
++    LOG(WARNING) << "ScopedSegmentAllocatorAccess <<";
+     // Allocate replicas
+-    std::vector<Replica> replicas;
+-    replicas.reserve(config.replica_num);
++    std::vector<Replica> new_replicas;
++    new_replicas.reserve(config.replica_num);
+     {
+         auto& allocators = segment_allocator_access.getAllocators();
++        LOG(WARNING) << "getAllocators";
+         auto& allocators_by_name = segment_allocator_access.getAllocatorsByName();
++        LOG(WARNING) << "getAllocatorsByName";
+         for (size_t i = 0; i < config.replica_num; ++i) {
+             std::vector<std::unique_ptr<AllocatedBuffer>> handles;
+             handles.reserve(slice_lengths.size());
+@@ -687,7 +689,7 @@ auto MasterService::MigrateStart(const std::string& key,
+             // Allocate space for each slice
+             for (size_t j = 0; j < slice_lengths.size(); ++j) {
+                 auto chunk_size = slice_lengths[j];
+-
++                LOG(WARNING) << "READY for allocate cxl for migrate, slice: " << j << ".";
+                 // Use the unified allocation strategy with replica config
+                 auto handle = allocation_strategy_->Allocate(
+                     allocators, allocators_by_name, chunk_size, config);
+@@ -708,25 +710,21 @@ auto MasterService::MigrateStart(const std::string& key,
+                 handles.emplace_back(std::move(handle));
+             }
+ 
+-            replicas.emplace_back(std::move(handles),
++            new_replicas.emplace_back(std::move(handles),
+                                   config.preferred_storage_level,
+                                   ReplicaStatus::PROCESSING);
+         }
+     }
+ 
+-    std::vector<Replica::Descriptor> replica_list;
+-    replica_list.reserve(replicas.size());
+-    for (const auto& replica : replicas) {
+-        replica_list.emplace_back(replica.get_descriptor());
++    std::vector<Replica::Descriptor> new_replicas_list;
++    new_replicas_list.reserve(new_replicas.size());
++    for (auto& replica : new_replicas) {
++        // Construct new_replicas_list for client transfer.
++        new_replicas_list.emplace_back(replica.get_descriptor());
++        // Add new replicas to existing metadata
++        existing_metadata.replicas.push_back(std::move(replica));
+     }
+-
+-    // No need to set lease here. The object will not be evicted until
+-    // PutEnd is called.
+-    metadata_shards_[shard_idx].metadata.emplace(
+-        std::piecewise_construct, std::forward_as_tuple(key),
+-        std::forward_as_tuple(total_length, std::move(replicas),
+-                              config.with_soft_pin));
+-    return replica_list;
++    return new_replicas_list;
+ }
+ 
+ auto MasterService::MigrateRevoke(const std::string& key, const ReplicateConfig& config)
+@@ -790,6 +788,33 @@ auto MasterService::MigrateEnd(const std::string& key,
+     return {};
+ }
+ 
++void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMetadata>::iterator& it) {
++    if (it->second.migrating)
++    {
++        return;
++    }
++    // replicas可能包含多副本，选择其中第一个副本，提交给该副本所在的client
++    LOG(WARNING) << "START PUSHING MASTER MQ: " << it->first;
++    auto& replica = it->second.replicas[0];
++    const auto& replica_descriptor = replica.get_descriptor();
++    DegradeMsg msg = {it->first, replica_descriptor};
++
++    // Get client_id from replica and segment descriptor.
++    auto segment_access = segment_manager_.getSegmentAccess();
++    UUID client_id;
++    // 通过遍历client_segments_映射查找包含目标segment的client_id
++    const auto& buffer_descriptor = replica_descriptor.get_buffer_descriptors();
++    auto& segment_name = buffer_descriptor[0].segment_name_;
++    auto err = segment_access.GetClientBySegmentName(segment_name, client_id);
++    LOG(WARNING) << "START PUSHING MASTER MQ, client ID: " << client_id;
++    if (err != ErrorCode::OK) {
++        LOG(ERROR) << "Failed to get client ID by segment name: " << static_cast<int>(err);
++    }
++
++    master_mq_service_->push(client_id, msg);
++    it->second.migrating = true;
++}
++
+ void MasterService::GCThreadFunc() {
+     VLOG(1) << "action=gc_thread_started";
+ 
+@@ -831,6 +856,7 @@ void MasterService::GCThreadFunc() {
+             double evict_ratio_lowerbound =
+                 std::max(evict_ratio_target * 0.5,
+                          used_ratio - eviction_high_watermark_ratio_);
++            LOG(WARNING) << "Ratio: " << used_ratio << ". Start eviction ~";
+             BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
+         }
+ 
+@@ -931,7 +957,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
+                     // Evict this object
+                     total_freed_size +=
+                         it->second.size * it->second.replicas.size();
+-                    it = shard.metadata.erase(it);
++                    // it = shard.metadata.erase(it);
++                    LOG(ERROR) << "PushMasterMQ(it) 1";
++                    PushMasterMQ(it);
++                    ++it;
+                     shard_evicted_count++;
+                 } else {
+                     // second pass candidates
+@@ -983,7 +1012,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
+                         // Evict this object
+                         total_freed_size +=
+                             it->second.size * it->second.replicas.size();
+-                        it = shard.metadata.erase(it);
++                        // it = shard.metadata.erase(it);
++                        LOG(ERROR) << "PushMasterMQ(it) 2";
++                        PushMasterMQ(it);
++                        ++it;
+                         evicted_count++;
+                         target_evict_num--;
+                     } else {
+@@ -1028,7 +1060,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
+                         it->second.lease_timeout <= soft_target_timeout) {
+                         total_freed_size +=
+                             it->second.size * it->second.replicas.size();
+-                        it = shard.metadata.erase(it);
++                        // it = shard.metadata.erase(it);
++                        LOG(ERROR) << "PushMasterMQ(it) 3";
++                        PushMasterMQ(it);
++                        ++it;
+                         evicted_count++;
+                         target_evict_num--;
+                     } else {
+diff --git a/mooncake-store/src/rpc_service.cpp b/mooncake-store/src/rpc_service.cpp
+index 9790a2e..dffbb96 100644
+--- a/mooncake-store/src/rpc_service.cpp
++++ b/mooncake-store/src/rpc_service.cpp
+@@ -34,7 +34,7 @@ WrappedMasterService::WrappedMasterService(
+                       allow_evict_soft_pinned_objects, eviction_ratio,
+                       eviction_high_watermark_ratio, view_version,
+                       client_live_ttl_sec, enable_ha, cluster_id, memory_allocator, enable_cxl),
+-      master_mq_service_(std::make_shared<MasterMQService>()),
++      master_mq_service_(master_service_.get_master_mq_service()),
+       http_server_(4, http_port),
+       metric_report_running_(enable_metric_reporting) {
+     init_http_server();
+@@ -502,13 +502,14 @@ tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID
+     DegradeMsg msg;
+     int ret = master_mq_service_->pop(client_id, msg);
+     if (ret != 0) {
++        LOG(ERROR) << "Failed to pop from master mq";
+         return tl::unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
+     }
++    LOG(ERROR) << "Pop from master mq: " << msg.key_;
+     return msg;
+ }
+ 
+ 
+-
+ void RegisterRpcService(
+     coro_rpc::coro_rpc_server& server,
+     mooncake::WrappedMasterService& wrapped_master_service) {
+@@ -551,6 +552,8 @@ void RegisterRpcService(
+         &wrapped_master_service);
+     server.register_handler<&mooncake::WrappedMasterService::MigrateEnd>(
+         &wrapped_master_service);
++    server.register_handler<&mooncake::WrappedMasterService::PopMasterMQ>(
++        &wrapped_master_service);
+ }
+ 
+ }  // namespace mooncake
+\ No newline at end of file
+diff --git a/mooncake-store/src/segment.cpp b/mooncake-store/src/segment.cpp
+index 4219408..db38b94 100644
+--- a/mooncake-store/src/segment.cpp
++++ b/mooncake-store/src/segment.cpp
+@@ -23,7 +23,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
+             segment_manager_->mounted_segments_[segment.id] = {
+                 segment, SegmentStatus::OK, allocator};
+ 
+-            MasterMetricManager::instance().inc_total_capacity(size);
++            // MasterMetricManager::instance().inc_total_capacity(size);
+ 
+             return ErrorCode::OK;
+         }
+@@ -203,6 +203,11 @@ ErrorCode ScopedSegmentAccess::CommitUnmountSegment(
+     const size_t& metrics_dec_capacity) {
+     // Remove from client_segments_
+     bool found_in_client_segments = false;
++
++    auto it = segment_manager_->mounted_segments_.find(segment_id);
++    auto& mounted_segment = it->second;
++    StorageLevel erased_level = mounted_segment.segment.level;
++
+     auto client_it = segment_manager_->client_segments_.find(client_id);
+     if (client_it != segment_manager_->client_segments_.end()) {
+         auto& segments = client_it->second;
+@@ -225,7 +230,10 @@ ErrorCode ScopedSegmentAccess::CommitUnmountSegment(
+     segment_manager_->mounted_segments_.erase(segment_id);
+ 
+     // Decrease the total capacity
+-    MasterMetricManager::instance().dec_total_capacity(metrics_dec_capacity);
++    if (erased_level != StorageLevel::CXL)
++    {
++        MasterMetricManager::instance().dec_total_capacity(metrics_dec_capacity);
++    }
+ 
+     return ErrorCode::OK;
+ }
+@@ -274,6 +282,28 @@ ErrorCode ScopedSegmentAccess::QuerySegments(const std::string& segment,
+     return ErrorCode::OK;
+ }
+ 
++ErrorCode ScopedSegmentAccess::GetClientBySegmentName(const std::string& segment_name, UUID& client_id)
++{
++    // 遍历所有client的segments查找匹配的segment_name
++    LOG(WARNING) << "GetClientBySegmentName";
++    for (const auto& client_segments_pair : segment_manager_->client_segments_) {
++        const UUID& current_client_id = client_segments_pair.first;
++        const std::vector<UUID>& client_segment_ids = client_segments_pair.second;
++        
++        // 检查当前client是否拥有目标segment
++        for (const UUID& segment_id : client_segment_ids) {
++            auto segment_it = segment_manager_->mounted_segments_.find(segment_id);
++            if (segment_it != segment_manager_->mounted_segments_.end() && 
++                segment_it->second.segment.name == segment_name) {
++                client_id = current_client_id;
++                return ErrorCode::OK;
++            }
++        }
++    }
++    
++    return ErrorCode::SEGMENT_NOT_FOUND;
++}
++
+ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(ReplicateConfig& config) {
+     auto it = client_segments_.find(config.client_id);
+     if (it == client_segments_.end()) {
+diff --git a/mooncake-store/tests/master_mq_service_test.cpp b/mooncake-store/tests/master_mq_service_test.cpp
+index f5993fb..425c84a 100644
+--- a/mooncake-store/tests/master_mq_service_test.cpp
++++ b/mooncake-store/tests/master_mq_service_test.cpp
+@@ -11,12 +11,13 @@ namespace mooncake::test {
+     class MasterMqServiceTest : public ::testing::Test { 
+        public:
+         std::shared_ptr<MasterMQService> master_mq_service = std::make_shared<MasterMQService>();
+-        UUID clients[];
++        std::vector<UUID> clients;
+        protected:
+         void SetUp() override {
+             google::InitGoogleLogging("MasterServiceTest");
+             FLAGS_logtostderr = true;
+ 
++            clients.resize(FLAGS_batch_num);
+             for (int i = 0; i < FLAGS_batch_num; i++) {
+                 clients[i] = generate_uuid();
+             }
+@@ -49,8 +50,9 @@ TEST_F(MasterMqServiceTest, Bind) {
+ TEST_F(MasterMqServiceTest, Base) {
+     std::atomic<int> success_count{0};
+     std::vector<std::thread> threads;
++    std::unique_ptr<MasterService> service_(new MasterService());
+     for (int i = 0; i < FLAGS_batch_num; i++) {
+-        threads.push_back(std::thread([this, i, &success_count]() {
++        threads.push_back(std::thread([this, i, &success_count, &service_]() {
+ 
+             std::vector<Replica::Descriptor> replica_list;
+ 
+@@ -59,8 +61,8 @@ TEST_F(MasterMqServiceTest, Base) {
+             constexpr size_t size = 1024 * 1024 * 16;
+             std::string segment_name = "test_segment_" + std::to_string(i);
+ 
+-            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
+-            UUID client_id = mooncake::generate_uuid();
++            UUID client_id = clients[i];
++            Segment segment(client_id, segment_name, buffer, size);
+ 
+             auto mount_result = service_->MountSegment(segment, client_id);
+             ASSERT_TRUE(mount_result.has_value());
+@@ -139,7 +141,7 @@ TEST_F(MasterMqServiceTest, PushPop) {
+             constexpr size_t size = 1024 * 1024 * 16;
+             std::string segment_name = "test_segment_" + std::to_string(i);
+ 
+-            Segment segment(mooncake::generate_uuid(), segment_name, buffer, size);
++            Segment segment(client_id, segment_name, buffer, size);
+ 
+             auto mount_result = service_->MountSegment(segment, client_id);
+             ASSERT_TRUE(mount_result.has_value());
+-- 
+2.41.0
+

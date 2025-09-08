@@ -106,7 +106,7 @@ class MasterServiceSupervisor {
     double eviction_ratio_;
     double eviction_high_watermark_ratio_;
     int64_t client_live_ttl_sec_;
-    bool enable_cxl;
+    bool enable_cxl_;
 
     // RPC server configuration parameters
     const int rpc_port_;

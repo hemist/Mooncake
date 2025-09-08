@@ -32,8 +32,8 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
       enable_ha_(enable_ha),
       cluster_id_(cluster_id),
       segment_manager_(memory_allocator, enable_cxl),
-      master_mq_service_(std::make_shared<MasterMQService>()),
-      enable_cxl_(enable_cxl) {
+      enable_cxl_(enable_cxl),
+      master_mq_service_(std::make_shared<MasterMQService>()) {
     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
         LOG(ERROR) << "Eviction ratio must be between 0.0 and 1.0, "
                    << "current value: " << eviction_ratio_;
@@ -119,6 +119,8 @@ auto MasterService::MountSegment(const Segment& segment, const UUID& client_id)
     } else if (err != ErrorCode::OK) {
         return tl::make_unexpected(err);
     }
+    // Bind client to master message queue
+    master_mq_service_->bind(client_id);
     return {};
 }
 
@@ -164,7 +166,7 @@ auto MasterService::ReMountSegment(const std::vector<Segment>& segments,
     if (err != ErrorCode::OK) {
         return tl::make_unexpected(err);
     }
-
+    master_mq_service_->bind(client_id);
     // Change the client status to OK
     ok_client_.insert(client_id);
     MasterMetricManager::instance().inc_active_clients();
@@ -226,6 +228,7 @@ auto MasterService::UnmountSegment(const UUID& segment_id,
     if (err != ErrorCode::OK) {
         return tl::make_unexpected(err);
     }
+    master_mq_service_->clear(client_id);
     return {};
 }
 
@@ -659,27 +662,26 @@ auto MasterService::MigrateStart(const std::string& key,
 
     VLOG(1) << "key=" << key << ", value_length=" << total_length
             << ", slice_count=" << slice_lengths.size() << ", config=" << config
-            << ", action=put_start_begin";
+            << ", action=migrate_start_begin";
 
-    // Lock the shard and check if object already exists
-    size_t shard_idx = getShardIndex(key);
-    MutexLocker lock(&metadata_shards_[shard_idx].mutex);
-
-    auto it = metadata_shards_[shard_idx].metadata.find(key);
-    if (it != metadata_shards_[shard_idx].metadata.end() &&
-        !CleanupStaleHandles(it->second)) {
-        LOG(INFO) << "key=" << key << ", info=object_already_exists";
-        return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
+    MetadataAccessor accessor(this, key);
+    if (!accessor.Exists()) {
+        LOG(ERROR) << "key=" << key << ", error=object_not_found";
+        return tl::make_unexpected(ErrorCode::OBJECT_NOT_FOUND);
     }
+    auto& existing_metadata = accessor.Get();
 
+    LOG(WARNING) << "ScopedSegmentAllocatorAccess >>";
     ScopedSegmentAllocatorAccess segment_allocator_access = segment_manager_.getAllocatorAccess();
-
+    LOG(WARNING) << "ScopedSegmentAllocatorAccess <<";
     // Allocate replicas
-    std::vector<Replica> replicas;
-    replicas.reserve(config.replica_num);
+    std::vector<Replica> new_replicas;
+    new_replicas.reserve(config.replica_num);
     {
         auto& allocators = segment_allocator_access.getAllocators();
+        LOG(WARNING) << "getAllocators";
         auto& allocators_by_name = segment_allocator_access.getAllocatorsByName();
+        LOG(WARNING) << "getAllocatorsByName";
         for (size_t i = 0; i < config.replica_num; ++i) {
             std::vector<std::unique_ptr<AllocatedBuffer>> handles;
             handles.reserve(slice_lengths.size());
@@ -687,7 +689,7 @@ auto MasterService::MigrateStart(const std::string& key,
             // Allocate space for each slice
             for (size_t j = 0; j < slice_lengths.size(); ++j) {
                 auto chunk_size = slice_lengths[j];
-
+                LOG(WARNING) << "READY for allocate cxl for migrate, slice: " << j << ".";
                 // Use the unified allocation strategy with replica config
                 auto handle = allocation_strategy_->Allocate(
                     allocators, allocators_by_name, chunk_size, config);
@@ -708,25 +710,21 @@ auto MasterService::MigrateStart(const std::string& key,
                 handles.emplace_back(std::move(handle));
             }
 
-            replicas.emplace_back(std::move(handles),
+            new_replicas.emplace_back(std::move(handles),
                                   config.preferred_storage_level,
                                   ReplicaStatus::PROCESSING);
         }
     }
 
-    std::vector<Replica::Descriptor> replica_list;
-    replica_list.reserve(replicas.size());
-    for (const auto& replica : replicas) {
-        replica_list.emplace_back(replica.get_descriptor());
+    std::vector<Replica::Descriptor> new_replicas_list;
+    new_replicas_list.reserve(new_replicas.size());
+    for (auto& replica : new_replicas) {
+        // Construct new_replicas_list for client transfer.
+        new_replicas_list.emplace_back(replica.get_descriptor());
+        // Add new replicas to existing metadata
+        existing_metadata.replicas.push_back(std::move(replica));
     }
-
-    // No need to set lease here. The object will not be evicted until
-    // PutEnd is called.
-    metadata_shards_[shard_idx].metadata.emplace(
-        std::piecewise_construct, std::forward_as_tuple(key),
-        std::forward_as_tuple(total_length, std::move(replicas),
-                              config.with_soft_pin));
-    return replica_list;
+    return new_replicas_list;
 }
 
 auto MasterService::MigrateRevoke(const std::string& key, const ReplicateConfig& config)
@@ -790,6 +788,33 @@ auto MasterService::MigrateEnd(const std::string& key,
     return {};
 }
 
+void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMetadata>::iterator& it) {
+    if (it->second.migrating)
+    {
+        return;
+    }
+    // replicas可能包含多副本，选择其中第一个副本，提交给该副本所在的client
+    LOG(WARNING) << "START PUSHING MASTER MQ: " << it->first;
+    auto& replica = it->second.replicas[0];
+    const auto& replica_descriptor = replica.get_descriptor();
+    DegradeMsg msg = {it->first, replica_descriptor};
+
+    // Get client_id from replica and segment descriptor.
+    auto segment_access = segment_manager_.getSegmentAccess();
+    UUID client_id;
+    // 通过遍历client_segments_映射查找包含目标segment的client_id
+    const auto& buffer_descriptor = replica_descriptor.get_buffer_descriptors();
+    auto& segment_name = buffer_descriptor[0].segment_name_;
+    auto err = segment_access.GetClientBySegmentName(segment_name, client_id);
+    LOG(WARNING) << "START PUSHING MASTER MQ, client ID: " << client_id;
+    if (err != ErrorCode::OK) {
+        LOG(ERROR) << "Failed to get client ID by segment name: " << static_cast<int>(err);
+    }
+
+    master_mq_service_->push(client_id, msg);
+    it->second.migrating = true;
+}
+
 void MasterService::GCThreadFunc() {
     VLOG(1) << "action=gc_thread_started";
 
@@ -831,6 +856,7 @@ void MasterService::GCThreadFunc() {
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
                          used_ratio - eviction_high_watermark_ratio_);
+            LOG(WARNING) << "Ratio: " << used_ratio << ". Start eviction ~";
             BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
         }
 
@@ -931,7 +957,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
                     // Evict this object
                     total_freed_size +=
                         it->second.size * it->second.replicas.size();
-                    it = shard.metadata.erase(it);
+                    // it = shard.metadata.erase(it);
+                    LOG(ERROR) << "PushMasterMQ(it) 1";
+                    PushMasterMQ(it);
+                    ++it;
                     shard_evicted_count++;
                 } else {
                     // second pass candidates
@@ -983,7 +1012,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         // Evict this object
                         total_freed_size +=
                             it->second.size * it->second.replicas.size();
-                        it = shard.metadata.erase(it);
+                        // it = shard.metadata.erase(it);
+                        LOG(ERROR) << "PushMasterMQ(it) 2";
+                        PushMasterMQ(it);
+                        ++it;
                         evicted_count++;
                         target_evict_num--;
                     } else {
@@ -1028,7 +1060,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         it->second.lease_timeout <= soft_target_timeout) {
                         total_freed_size +=
                             it->second.size * it->second.replicas.size();
-                        it = shard.metadata.erase(it);
+                        // it = shard.metadata.erase(it);
+                        LOG(ERROR) << "PushMasterMQ(it) 3";
+                        PushMasterMQ(it);
+                        ++it;
                         evicted_count++;
                         target_evict_num--;
                     } else {
