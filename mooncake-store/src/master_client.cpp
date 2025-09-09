@@ -721,7 +721,7 @@ tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client
                 //            << result.error().msg;
                 co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
             }
-            LOG(WARNING) << "MasterClient::PopMasterMQ, get result, client_id:" << client_id;
+            // LOG(WARNING) << "MasterClient::PopMasterMQ, get result, client_id:" << client_id;
             co_return result->result();
         }());
     timer.LogResponseExpected(result);

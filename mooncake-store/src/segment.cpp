@@ -23,7 +23,8 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
             segment_manager_->mounted_segments_[segment.id] = {
                 segment, SegmentStatus::OK, allocator};
 
-            // MasterMetricManager::instance().inc_total_capacity(size);
+            MasterMetricManager::instance().inc_total_cxl_capacity(size);
+            MasterMetricManager::instance().inc_total_capacity(size);
 
             return ErrorCode::OK;
         }
@@ -103,6 +104,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
         segment, SegmentStatus::OK, std::move(allocator)};
 
     MasterMetricManager::instance().inc_total_capacity(size);
+    MasterMetricManager::instance().inc_total_dram_capacity(size);
 
     return ErrorCode::OK;
 }

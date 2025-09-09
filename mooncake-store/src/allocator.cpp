@@ -83,6 +83,7 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
             << " segment=" << segment_name_ << " address=" << buffer;
     cur_size_.fetch_add(size);
     MasterMetricManager::instance().inc_allocated_size(size);
+    MasterMetricManager::instance().inc_allocated_dram_size(size);
     return std::make_unique<AllocatedBuffer>(shared_from_this(), segment_name_,
                                              buffer, size);
 }
@@ -99,6 +100,7 @@ void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
             handle->size_;  // Store size before handle might become invalid
         cur_size_.fetch_sub(freed_size);
         MasterMetricManager::instance().dec_allocated_size(freed_size);
+        MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
         VLOG(1) << "deallocation_succeeded address=" << handle->buffer_ptr_
                 << " size=" << freed_size << " segment=" << segment_name_;
     } catch (const std::exception& e) {

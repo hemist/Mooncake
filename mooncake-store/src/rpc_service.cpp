@@ -502,7 +502,7 @@ tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID
     DegradeMsg msg;
     int ret = master_mq_service_->pop(client_id, msg);
     if (ret != 0) {
-        LOG(ERROR) << "Failed to pop from master mq";
+        // LOG(ERROR) << "Failed to pop from master mq";
         return tl::unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
     }
     LOG(ERROR) << "Pop from master mq: " << msg.key_;

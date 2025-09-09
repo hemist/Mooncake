@@ -20,8 +20,18 @@ MasterMetricManager::MasterMetricManager()
                       "Total bytes currently allocated across all segments"),
       total_capacity_("master_total_capacity_bytes",
                       "Total capacity across all mounted segments"),
+      allocated_dram_size_("master_allocated_dram_bytes",
+                            "Total bytes currently allocated across all dram segments"),
       total_dram_capacity_("master_total_dram_capacity_bytes",
                            "Total dram capacity across all mounted segments"),
+      allocated_cxl_size_("master_allocated_cxl_bytes",
+                           "Total bytes currently allocated across all cxl segments"),
+      total_cxl_capacity_("master_total_cxl_capacity_bytes",
+                          "Total cxl capacity across all mounted segments"),
+      allocated_ssd_size_("master_allocated_ssd_bytes",
+                           "Total bytes currently allocated across all ssd segments"),
+      total_ssd_capacity_("master_total_ssd_capacity_bytes",
+                           "Total ssd capacity across all mounted segments"),
       key_count_("master_key_count",
                  "Total number of keys managed by the master"),
       soft_pin_key_count_("master_soft_pin_key_count",
@@ -151,11 +161,51 @@ void MasterMetricManager::dec_total_capacity(int64_t val) {
     total_capacity_.dec(val);
 }
 
+void MasterMetricManager::inc_allocated_dram_size(int64_t val) {
+    allocated_dram_size_.inc(val);
+}
+
+void MasterMetricManager::dec_allocated_dram_size(int64_t val) {
+    allocated_dram_size_.dec(val);
+}
+
 void MasterMetricManager::inc_total_dram_capacity(int64_t val) {
     total_dram_capacity_.inc(val);
 }
 void MasterMetricManager::dec_total_dram_capacity(int64_t val) {
     total_dram_capacity_.dec(val);
+}
+
+void MasterMetricManager::inc_allocated_cxl_size(int64_t val) {
+    allocated_cxl_size_.inc(val);
+}
+
+void MasterMetricManager::dec_allocated_cxl_size(int64_t val) {
+    allocated_cxl_size_.dec(val);
+}
+
+void MasterMetricManager::inc_total_cxl_capacity(int64_t val) {
+    total_cxl_capacity_.inc(val);
+}
+
+void MasterMetricManager::dec_total_cxl_capacity(int64_t val) {
+    total_cxl_capacity_.dec(val);
+}
+
+void MasterMetricManager::inc_allocated_ssd_size(int64_t val) {
+    allocated_ssd_size_.inc(val);
+}
+
+void MasterMetricManager::dec_allocated_ssd_size(int64_t val) {
+    allocated_ssd_size_.dec(val);
+}
+
+void MasterMetricManager::inc_total_ssd_capacity(int64_t val) {
+    total_ssd_capacity_.inc(val);
+}
+
+void MasterMetricManager::dec_total_ssd_capacity(int64_t val) {
+    total_ssd_capacity_.dec(val);
 }
 
 int64_t MasterMetricManager::get_allocated_size() {
@@ -170,13 +220,20 @@ int64_t MasterMetricManager::get_total_dram_capacity() {
     return total_dram_capacity_.value();
 }
 
-double MasterMetricManager::get_global_used_ratio(void) {
-    double allocated = allocated_size_.value();
-    double capacity = total_capacity_.value();
-    if (capacity == 0) {
-        return 0.0;
+std::vector<double> MasterMetricManager::get_global_used_ratio(void) {
+    double ram_allocated = allocated_dram_size_.value();
+    double ram_capacity = total_dram_capacity_.value();
+    double cxl_allocated = allocated_cxl_size_.value();
+    double cxl_capacity = total_cxl_capacity_.value();
+
+
+    if (ram_capacity == 0.0) {
+        return {0.0, 0.0, 0.0};
     }
-    return allocated / capacity;
+
+    double ram_ratio = ram_allocated / ram_capacity;
+    double cxl_ratio = cxl_capacity == 0.0 ? 0.0 : cxl_allocated / cxl_capacity;
+    return {ram_ratio, cxl_ratio, 0.0};
 }
 
 // Key/Value Metrics
@@ -618,6 +675,12 @@ std::string MasterMetricManager::get_summary_string() {
     // --- Get current values ---
     int64_t allocated = allocated_size_.value();
     int64_t capacity = total_capacity_.value();
+    int64_t ram_allocated = allocated_dram_size_.value();
+    int64_t ram_capacity = total_dram_capacity_.value();
+    int64_t cxl_allocated = allocated_cxl_size_.value();
+    int64_t cxl_capacity = total_cxl_capacity_.value();
+    int64_t ssd_allocated = allocated_ssd_size_.value();
+    int64_t ssd_capacity = total_ssd_capacity_.value();
     int64_t keys = key_count_.value();
     int64_t soft_pin_keys = soft_pin_key_count_.value();
     int64_t active_clients = active_clients_.value();
@@ -657,6 +720,13 @@ std::string MasterMetricManager::get_summary_string() {
         ss << " (" << std::fixed << std::setprecision(1)
            << ((double) allocated / (double)capacity * 100.0) << "%)";
     }
+    ss << ", ";
+    ss << "DRAM: " << format_bytes(ram_allocated) << " / "
+       << format_bytes(ram_capacity) << ", ";
+    ss << "CXL: " << format_bytes(cxl_allocated) << " / "
+       << format_bytes(cxl_capacity) << ", ";
+    ss << "SSD: " << format_bytes(ssd_allocated) << " / "
+       << format_bytes(ssd_capacity);
     ss << " | Keys: " << keys << " (soft-pinned: " << soft_pin_keys << ")";
     if (enable_ha_) {
         ss << " | Clients: " << active_clients;

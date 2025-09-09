@@ -24,7 +24,7 @@ int MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
 int MasterMQService::pop(const UUID& client_id, DegradeMsg &msg) {
     std::unique_lock lock(mu_);
     auto it = degraed_mq_.find(client_id);
-    LOG(ERROR) << "MasterMQService::pop instance: " << this << " , degraed_mq_.size: " << degraed_mq_.size();
+    // LOG(ERROR) << "MasterMQService::pop instance: " << this << " , degraed_mq_.size: " << degraed_mq_.size();
     if (it == degraed_mq_.end() || it->second.empty()) {
         // LOG(ERROR) << "Client id is not found";
         return -1;

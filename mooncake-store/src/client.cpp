@@ -188,9 +188,12 @@ ErrorCode Client::InitTransferEngine(const std::string& local_hostname,
     // get auto_discover and filters from env
     bool auto_discover = get_auto_discover();
     LOG(INFO) << "auto_discover: " << auto_discover;
+
+    std::vector<std::string> filters = 
+        protocol_args != nullptr ? get_auto_discover_filters(auto_discover) : std::vector<std::string>{};
+    LOG(INFO) << "filters nullptr: " << filters.empty();
     transfer_engine_.setAutoDiscover(auto_discover);
-    transfer_engine_.setWhitelistFilters(
-        get_auto_discover_filters(auto_discover));
+    transfer_engine_.setWhitelistFilters(std::move(filters));
 
     auto [hostname, port] = parseHostNameWithPort(local_hostname);
     int rc = transfer_engine_.init(metadata_connstring, local_hostname,

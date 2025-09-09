@@ -24,12 +24,22 @@ class MasterMetricManager {
     void dec_allocated_size(int64_t val = 1);
     void inc_total_capacity(int64_t val = 1);
     void dec_total_capacity(int64_t val = 1);
+    void inc_allocated_dram_size(int64_t val = 1);
+    void dec_allocated_dram_size(int64_t val = 1);
     void inc_total_dram_capacity(int64_t val = 1);
     void dec_total_dram_capacity(int64_t val = 1);
+    void inc_allocated_cxl_size(int64_t val = 1);
+    void dec_allocated_cxl_size(int64_t val = 1);
+    void inc_total_cxl_capacity(int64_t val = 1);
+    void dec_total_cxl_capacity(int64_t val = 1);
+    void inc_allocated_ssd_size(int64_t val = 1);
+    void dec_allocated_ssd_size(int64_t val = 1);
+    void inc_total_ssd_capacity(int64_t val = 1);
+    void dec_total_ssd_capacity(int64_t val = 1);
     int64_t get_allocated_size();
     int64_t get_total_capacity();
     int64_t get_total_dram_capacity();
-    double get_global_used_ratio(void);
+    std::vector<double> get_global_used_ratio(void);
 
     // Key/Value Metrics
     void inc_key_count(int64_t val = 1);
@@ -166,7 +176,12 @@ class MasterMetricManager {
     // Storage Metrics
     ylt::metric::gauge_t allocated_size_;  // Use update for gauge
     ylt::metric::gauge_t total_capacity_;  // Use update for gauge
+    ylt::metric::gauge_t allocated_dram_size_;
     ylt::metric::gauge_t total_dram_capacity_;  // Use update for gauge
+    ylt::metric::gauge_t allocated_cxl_size_;
+    ylt::metric::gauge_t total_cxl_capacity_;
+    ylt::metric::gauge_t allocated_ssd_size_;
+    ylt::metric::gauge_t total_ssd_capacity_;
 
     // Key/Value Metrics
     ylt::metric::gauge_t key_count_;

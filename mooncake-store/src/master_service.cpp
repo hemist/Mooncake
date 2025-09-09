@@ -763,6 +763,14 @@ auto MasterService::MigrateEnd(const std::string& key,
         if (replica.get_descriptor().storage_level == config.preferred_storage_level) {
             replica.mark_complete();
             target_replica_found = true;
+
+            if (replica.get_descriptor().storage_level == StorageLevel::CXL) {
+                MasterMetricManager::instance().inc_allocated_cxl_size(replica.get_size());
+            }
+        } else {
+            if (replica.get_descriptor().storage_level == StorageLevel::RAM) {
+                MasterMetricManager::instance().dec_allocated_dram_size(replica.get_size());
+            }
         }
     }
 
@@ -846,17 +854,17 @@ void MasterService::GCThreadFunc() {
             }
             delete task;
         }
-        double used_ratio =
+        std::vector<double> used_ratios =
             MasterMetricManager::instance().get_global_used_ratio();
-        if (used_ratio > eviction_high_watermark_ratio_ ||
+        if (used_ratios[0] > eviction_high_watermark_ratio_ ||
             (need_eviction_ && eviction_ratio_ > 0.0)) {
             double evict_ratio_target = std::max(
                 eviction_ratio_,
-                used_ratio - eviction_high_watermark_ratio_ + eviction_ratio_);
+                used_ratios[0] - eviction_high_watermark_ratio_ + eviction_ratio_);
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
-                         used_ratio - eviction_high_watermark_ratio_);
-            LOG(WARNING) << "Ratio: " << used_ratio << ". Start eviction ~";
+                         used_ratios[0] - eviction_high_watermark_ratio_);
+            LOG(WARNING) << "Ratio: " << used_ratios[0] << ". Start eviction ~";
             BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
         }
 

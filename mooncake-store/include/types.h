@@ -14,6 +14,7 @@
 #include "allocator.h"
 #include "ylt/struct_json/json_reader.h"
 #include "ylt/struct_json/json_writer.h"
+#include "master_metric_manager.h"
 
 #ifdef STORE_USE_ETCD
 #include "libetcd_wrapper.h"
@@ -329,6 +330,8 @@ class AllocatedBuffer {
         buffer_ptr_ = reinterpret_cast<void*>(offset_raw - DEFAULT_CXL_BASE);
         level = StorageLevel::CXL;
         segment_name_ = client_segment_name;
+        MasterMetricManager::instance().dec_allocated_dram_size(size_);
+        MasterMetricManager::instance().inc_allocated_cxl_size(size_);
     }
 
     void* get_vaddr_from_cxl() {
@@ -394,6 +397,10 @@ class Replica {
     }
 
     [[nodiscard]] Descriptor get_descriptor() const;
+
+    [[nodiscard]] size_t get_size() const noexcept {
+        return buffers_.size();
+    }
 
     [[nodiscard]] ReplicaStatus status() const { return status_; }
 
