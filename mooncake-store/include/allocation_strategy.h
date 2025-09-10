@@ -184,7 +184,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
         const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
             allocators_by_name, 
         size_t objectSize, const ReplicateConfig& config) {
-        LOG(WARNING) << "TryPreferredAllocate";
+        LOG(WARNING) << "TryPreferredAllocate, preferred_segment=" << config.preferred_segment;
         if (config.preferred_segment.empty()) {
             return nullptr;
         }
@@ -194,16 +194,20 @@ class LevelAllocationStrategy : public AllocationStrategy {
             return nullptr;
         }
 
-        auto &allocator = preferred_its->second[0];
-        auto allocated_buffer = allocator->allocate(objectSize);
-        if (allocated_buffer) {
-            if (config.preferred_storage_level == StorageLevel::CXL) {
-                allocated_buffer->change_to_cxl(config.preferred_segment);
+        std::shared_ptr<BufferAllocatorBase> allocator;
+        for (const auto& cand : preferred_its->second) {
+            if (cand->getSegmentName() != DEFAULT_CXL_PATH) {
+                allocator = cand;
+                break;
             }
-            return allocated_buffer;
         }
-
-        return nullptr;
+        if (!allocator) {
+            LOG(ERROR) << "No non-CXL allocator in preferred_segment";
+            return nullptr;
+        }
+        LOG(INFO) << "allocator's segment_name_ = " << allocator->getSegmentName();
+        
+        return allocator->allocate(objectSize);
     }
 
 };
