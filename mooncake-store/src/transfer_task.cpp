@@ -469,7 +469,7 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         const auto& handle = handles[i];
         const auto& slice = slices[i];
 
-        LOG(INFO) << "TransferTask protocol: " << proto << ", segment name: " << handle.segment_name_;
+        // LOG(INFO) << "TransferTask protocol: " << proto << ", segment name: " << handle.segment_name_;
 
         Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
         if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
@@ -495,7 +495,7 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
         return std::nullopt;
     }
 
-    LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
+    // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
     // Submit transfer
     Status s = engine_.submitTransfer(batch_id, requests, proto);
     if (!s.ok()) {

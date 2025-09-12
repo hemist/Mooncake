@@ -315,6 +315,7 @@ auto MasterService::GetReplicaList(std::string_view key)
     replica_list.reserve(metadata.replicas.size());
     for (const auto& replica : metadata.replicas) {
         replica_list.emplace_back(replica.get_descriptor());
+        LOG(INFO) << "Replica(key = " << key << ") on " << replica.get_descriptor().get_storage_level();
     }
 
     // Only mark for GC if enabled
@@ -408,9 +409,7 @@ auto MasterService::PutStart(const std::string& key,
                     allocators, allocators_by_name, chunk_size, client_config);
 
                 if (!handle) {
-                    LOG(ERROR)
-                        << "key=" << key << ", replica_id=" << i
-                        << ", slice_index=" << j << ", error=allocation_failed";
+                    // LOG(ERROR) << "key=" << key << ", replica_id=" << i << ", slice_index=" << j << ", error=allocation_failed";
                     // If the allocation failed, we need to evict some objects
                     // to free up space for future allocations.
                     need_eviction_ = true;
@@ -671,17 +670,13 @@ auto MasterService::MigrateStart(const std::string& key,
     }
     auto& existing_metadata = accessor.Get();
 
-    LOG(WARNING) << "ScopedSegmentAllocatorAccess >>";
     ScopedSegmentAllocatorAccess segment_allocator_access = segment_manager_.getAllocatorAccess();
-    LOG(WARNING) << "ScopedSegmentAllocatorAccess <<";
     // Allocate replicas
     std::vector<Replica> new_replicas;
     new_replicas.reserve(config.replica_num);
     {
         auto& allocators = segment_allocator_access.getAllocators();
-        LOG(WARNING) << "getAllocators";
         auto& allocators_by_name = segment_allocator_access.getAllocatorsByName();
-        LOG(WARNING) << "getAllocatorsByName";
         for (size_t i = 0; i < config.replica_num; ++i) {
             std::vector<std::unique_ptr<AllocatedBuffer>> handles;
             handles.reserve(slice_lengths.size());
@@ -689,7 +684,6 @@ auto MasterService::MigrateStart(const std::string& key,
             // Allocate space for each slice
             for (size_t j = 0; j < slice_lengths.size(); ++j) {
                 auto chunk_size = slice_lengths[j];
-                LOG(WARNING) << "READY for allocate cxl for migrate, slice: " << j << ".";
                 // Use the unified allocation strategy with replica config
                 auto handle = allocation_strategy_->Allocate(
                     allocators, allocators_by_name, chunk_size, config);
@@ -802,7 +796,7 @@ void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMet
         return;
     }
     // replicas可能包含多副本，选择其中第一个副本，提交给该副本所在的client
-    LOG(WARNING) << "START PUSHING MASTER MQ: " << it->first;
+    // LOG(WARNING) << "START PUSHING MASTER MQ: " << it->first;
     auto& replica = it->second.replicas[0];
     const auto& replica_descriptor = replica.get_descriptor();
     DegradeMsg msg = {it->first, replica_descriptor};
@@ -814,7 +808,7 @@ void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMet
     const auto& buffer_descriptor = replica_descriptor.get_buffer_descriptors();
     auto& segment_name = buffer_descriptor[0].segment_name_;
     auto err = segment_access.GetClientBySegmentName(segment_name, client_id);
-    LOG(WARNING) << "START PUSHING MASTER MQ, client ID: " << client_id;
+    // LOG(WARNING) << "START PUSHING MASTER MQ, client ID: " << client_id;
     if (err != ErrorCode::OK) {
         LOG(ERROR) << "Failed to get client ID by segment name: " << static_cast<int>(err);
     }
@@ -864,8 +858,9 @@ void MasterService::GCThreadFunc() {
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
                          used_ratios[0] - eviction_high_watermark_ratio_);
-            LOG(WARNING) << "Ratio: " << used_ratios[0] << ". Start eviction ~";
+            LOG(WARNING) << "Ratio: " << used_ratios[0] << ". Start eviction, " << need_eviction_;
             BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
+            need_eviction_ = false;
         }
 
         std::this_thread::sleep_for(
@@ -966,7 +961,6 @@ void MasterService::BatchEvict(double evict_ratio_target,
                     total_freed_size +=
                         it->second.size * it->second.replicas.size();
                     // it = shard.metadata.erase(it);
-                    LOG(ERROR) << "PushMasterMQ(it) 1";
                     PushMasterMQ(it);
                     ++it;
                     shard_evicted_count++;
@@ -1093,14 +1087,14 @@ void MasterService::BatchEvict(double evict_ratio_target,
         }
     }
 
+    //need_eviction_ = false;
+
     if (evicted_count > 0) {
-        need_eviction_ = false;
         MasterMetricManager::instance().inc_eviction_success(evicted_count,
                                                              total_freed_size);
     } else {
         if (object_count == 0) {
             // No objects to evict, no need to check again
-            need_eviction_ = false;
         }
         MasterMetricManager::instance().inc_eviction_fail();
     }

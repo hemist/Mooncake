@@ -414,7 +414,7 @@ class MasterService {
     std::atomic<bool> gc_running_{false};
     bool enable_gc_{true};  // Flag to enable/disable garbage collection
     static constexpr uint64_t kGCThreadSleepMs =
-        1000;  // 10 ms sleep between GC and eviction checks
+        10;  // 10 ms sleep between GC and eviction checks
 
     // Lease related members
     const uint64_t default_kv_lease_ttl_;     // in milliseconds

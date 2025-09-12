@@ -379,6 +379,12 @@ tl::expected<void, ErrorCode> Client::Get(
         return tl::unexpected(err);
     }
 
+    LOG(INFO) << "Replica(key = " << object_key << ") on " << replica.get_storage_level();
+
+    // if (replica.get_storage_level() == StorageLevel::CXL) {
+    //     LOG(INFO) << "Replica(key = " << object_key << ") on CXL!";
+    // }
+
     err = TransferRead(replica, slices);
     if (err != ErrorCode::OK) {
         LOG(ERROR) << "transfer_read_failed key=" << object_key;
@@ -1158,7 +1164,7 @@ tl::expected<void, ErrorCode> Client::Migrate(DegradeMsg &msg) {
         LOG(ERROR) << "Failed to start put operation: " << err;
         return tl::unexpected(err);
     }
-    LOG(WARNING) << "Starting Migrate TransferWrite for key=" << msg.key_;
+   //  LOG(WARNING) << "Starting Migrate TransferWrite for key=" << msg.key_;
     // Transfer data using allocated handles from all replicas
     for (const auto& replica : start_result.value()) {
         ErrorCode transfer_err = TransferWrite(replica, slices);
@@ -1385,7 +1391,7 @@ void Client::DegradeThreadFunc() {
         auto result = master_client_.PopMasterMQ(client_id_);
         if (result) {
             DegradeMsg msg = result.value();
-            LOG(WARNING) << "Processing degrade task for key: " << msg.key_;
+            // LOG(WARNING) << "Processing degrade task for key: " << msg.key_;
             
             // Perform migration
             auto migrate_result = Migrate(msg);
@@ -1393,7 +1399,7 @@ void Client::DegradeThreadFunc() {
                 LOG(ERROR) << "Failed to migrate object with key: " << msg.key_
                            << ", error: " << toString(migrate_result.error());
             } else {
-                LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
+                // LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
             }
         } else {
             // No degrade task available, sleep for a while

@@ -15,9 +15,9 @@ int MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
         return -1;
     }
     std::unique_lock lock(mu_);
-    LOG(ERROR) << "MasterMQService::push instance: " << this << " >>, degraed_mq_.size: " << degraed_mq_.size();
+    // LOG(ERROR) << "MasterMQService::push instance: " << this << " >>, degraed_mq_.size: " << degraed_mq_.size();
     degraed_mq_[client_id].push(msg);
-    LOG(ERROR) << "MasterMQService::push instance: " << this << " <<, degraed_mq_.size: " << degraed_mq_.size();
+    // LOG(ERROR) << "MasterMQService::push instance: " << this << " <<, degraed_mq_.size: " << degraed_mq_.size();
     return 0;
 }
 

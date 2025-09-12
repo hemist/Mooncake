@@ -312,8 +312,7 @@ WrappedMasterService::BatchPutStart(
     for (size_t i = 0; i < results.size(); ++i) {
         if (!results[i].has_value()) {
             failure_count++;
-            LOG(ERROR) << "BatchPutStart failed for key[" << i << "] '"
-                       << keys[i] << "': " << toString(results[i].error());
+            // LOG(ERROR) << "BatchPutStart failed for key[" << i << "] '" << keys[i] << "': " << toString(results[i].error());
         }
     }
     MasterMetricManager::instance().inc_batch_put_start_failures(failure_count);
@@ -476,8 +475,8 @@ WrappedMasterService::MigrateStart(
             timer.LogRequest("key=", key,
                              ", slice_lengths=", slice_lengths.size());
         },
-        [&] { MasterMetricManager::instance().inc_put_start_requests(); },
-        [] { MasterMetricManager::instance().inc_put_start_failures(); });
+        [&] { MasterMetricManager::instance().inc_migrate_start_requests(); },
+        [] { MasterMetricManager::instance().inc_migrate_start_failures(); });
 }
 
 tl::expected<void, ErrorCode> 
@@ -486,16 +485,16 @@ WrappedMasterService::MigrateRevoke(const std::string& key,
     return execute_rpc(
         "MigrateRevoke", [&] { return master_service_.MigrateRevoke(key, config); },
         [&](auto& timer) { timer.LogRequest("key=", key); },
-        [] { MasterMetricManager::instance().inc_put_revoke_requests(); },
-        [] { MasterMetricManager::instance().inc_put_revoke_failures(); });
+        [] { MasterMetricManager::instance().inc_migrate_revoke_requests(); },
+        [] { MasterMetricManager::instance().inc_migrate_revoke_failures(); });
 }
 tl::expected<void, ErrorCode> WrappedMasterService::MigrateEnd(const std::string& key,
                                          const ReplicateConfig& config) {
     return execute_rpc(
         "MigrateEnd", [&] { return master_service_.MigrateEnd(key, config); },
         [&](auto& timer) { timer.LogRequest("key=", key); },
-        [] { MasterMetricManager::instance().inc_put_end_requests(); },
-        [] { MasterMetricManager::instance().inc_put_end_failures(); });
+        [] { MasterMetricManager::instance().inc_migrate_end_requests(); },
+        [] { MasterMetricManager::instance().inc_migrate_end_failures(); });
 }
 
 tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID& client_id) {
@@ -505,7 +504,7 @@ tl::expected<DegradeMsg, ErrorCode> WrappedMasterService::PopMasterMQ(const UUID
         // LOG(ERROR) << "Failed to pop from master mq";
         return tl::unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
     }
-    LOG(ERROR) << "Pop from master mq: " << msg.key_;
+    VLOG(1) << "Pop from master mq: " << msg.key_;
     return msg;
 }
 

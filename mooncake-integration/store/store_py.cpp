@@ -1210,6 +1210,8 @@ DistributedObjectStore::batch_get_into_internal(
     std::vector<tl::expected<int64_t, ErrorCode>> results;
     results.reserve(num_keys);
 
+    LOG(INFO) << "Start BatchGet, keys.size = " << num_keys;
+
     if (num_keys == 0) {
         return results;
     }
@@ -1283,6 +1285,8 @@ DistributedObjectStore::batch_get_into_internal(
             }
         }
 
+        LOG(INFO) << "Replica level: " << replica.get_storage_level();
+
         // Store operation info for batch processing
         valid_operations.push_back({.key = key,
                                     .original_index = i,
@@ -1349,6 +1353,8 @@ DistributedObjectStore::batch_put_from_internal(
     }
 
     std::unordered_map<std::string, std::vector<mooncake::Slice>> all_slices;
+
+    LOG(INFO) << "Start BatchPut, keys.size = " << keys.size();
 
     // Create slices from user buffers
     for (size_t i = 0; i < keys.size(); ++i) {

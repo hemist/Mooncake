@@ -165,12 +165,12 @@ class LevelAllocationStrategy : public AllocationStrategy {
     std::unique_ptr<AllocatedBuffer> CxlOffsetAllocate(
         const std::shared_ptr<BufferAllocatorBase>& cxl_global_allocator,
         size_t size, const ReplicateConfig& config) {
-        LOG(WARNING) << "CxlOffsetAllocate";
+        VLOG(1) << "CxlOffsetAllocate";
         if (!cxl_global_allocator || size == 0) {
             return nullptr;
         }
 
-        LOG(INFO) << "Do cxl allocate, overwriten segment=" << config.preferred_segment;
+        VLOG(1) << "Do cxl allocate, overwriten segment=" << config.preferred_segment;
 
         auto allocated_buffer = cxl_global_allocator->allocate(size);
         if (allocated_buffer) {
@@ -184,7 +184,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
         const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAllocatorBase>>>&
             allocators_by_name, 
         size_t objectSize, const ReplicateConfig& config) {
-        LOG(WARNING) << "TryPreferredAllocate, preferred_segment=" << config.preferred_segment;
+        VLOG(1) << "TryPreferredAllocate, preferred_segment=" << config.preferred_segment;
         if (config.preferred_segment.empty()) {
             return nullptr;
         }
@@ -205,7 +205,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
             LOG(ERROR) << "No non-CXL allocator in preferred_segment";
             return nullptr;
         }
-        LOG(INFO) << "allocator's segment_name_ = " << allocator->getSegmentName();
+        VLOG(1) << "allocator's segment_name_ = " << allocator->getSegmentName();
         
         return allocator->allocate(objectSize);
     }

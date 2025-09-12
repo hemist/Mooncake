@@ -67,9 +67,7 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
         size_t padding_size = std::max(size, kMinSliceSize);
         buffer = memory_allocator_->allocate(pool_id_, padding_size);
         if (!buffer) {
-            LOG(WARNING) << "allocation_failed size=" << size
-                         << " segment=" << segment_name_
-                         << " current_size=" << cur_size_;
+            // LOG(WARNING) << "allocation_failed size=" << size << " segment=" << segment_name_ << " current_size=" << cur_size_;
             return nullptr;
         }
     } catch (const std::exception& e) {

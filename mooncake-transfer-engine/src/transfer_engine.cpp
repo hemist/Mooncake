@@ -281,7 +281,7 @@ Transport::SegmentHandle TransferEngine::openSegment(
     while (!trimmed_segment_name.empty() && trimmed_segment_name[0] == '/')
         trimmed_segment_name.erase(0, 1);
 
-    LOG(INFO) << "Opening segment: " << trimmed_segment_name;
+    // LOG(INFO) << "Opening segment: " << trimmed_segment_name;
     if (trimmed_segment_name.empty()) return ERR_INVALID_ARGUMENT;
     return metadata_->getSegmentID(trimmed_segment_name);
 }

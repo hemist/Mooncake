@@ -54,8 +54,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
     if (exist_segment_it != segment_manager_->mounted_segments_.end()) {
         auto& exist_segment = exist_segment_it->second;
         if (exist_segment.status == SegmentStatus::OK) {
-            LOG(WARNING) << "segment_name=" << segment.name
-                         << ", warn=segment_already_exists";
+            // LOG(WARNING) << "segment_name=" << segment.name << ", warn=segment_already_exists";
             return ErrorCode::SEGMENT_ALREADY_EXISTS;
         } else {
             LOG(ERROR) << "segment_name=" << segment.name
@@ -287,7 +286,7 @@ ErrorCode ScopedSegmentAccess::QuerySegments(const std::string& segment,
 ErrorCode ScopedSegmentAccess::GetClientBySegmentName(const std::string& segment_name, UUID& client_id)
 {
     // 遍历所有client的segments查找匹配的segment_name
-    LOG(WARNING) << "GetClientBySegmentName";
+    // LOG(WARNING) << "GetClientBySegmentName";
     for (const auto& client_segments_pair : segment_manager_->client_segments_) {
         const UUID& current_client_id = client_segments_pair.first;
         const std::vector<UUID>& client_segment_ids = client_segments_pair.second;
