@@ -77,7 +77,7 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
         LOG(ERROR) << "allocation_unknown_exception";
         return nullptr;
     }
-    VLOG(1) << "allocation_succeeded  by size " << memory_allocator_->getMemorySize() << " size=" << size
+    VLOG(1) << "allocation_succeeded by size " << memory_allocator_->getMemorySize() << " size=" << size
             << " segment=" << segment_name_ << " address=" << buffer;
     cur_size_.fetch_add(size);
     MasterMetricManager::instance().inc_allocated_size(size);
