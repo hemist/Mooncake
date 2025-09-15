@@ -402,14 +402,17 @@ std::optional<TransferFuture> TransferSubmitter::submit(
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
+                LOG(INFO) << "LOCAL_MEMCPY";
                 return submitMemcpyOperation(handles, slices, op_code);
             case TransferStrategy::TRANSFER_ENGINE:
+                LOG(INFO) << "TRANSFER_ENGINE";
                 return submitTransferEngineOperation(handles, slices, op_code, proto);
             default:
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
                 return std::nullopt;
         }
     }else{
+        LOG(INFO) << "FILE transfer";
         return submitFileReadOperation(replica, slices, op_code);
     }
 }

@@ -271,7 +271,9 @@ tl::expected<void, ErrorCode> Client::Get(const std::string& object_key,
 std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     const std::vector<std::string>& object_keys,
     std::unordered_map<std::string, std::vector<Slice>>& slices) {
+    LOG(INFO) << "BatchQuery Start";
     auto batched_query_results = BatchQuery(object_keys);
+    LOG(INFO) << "BatchQuery End";
 
     // If any queries failed, return error results immediately for failed
     // queries
@@ -353,10 +355,8 @@ Client::BatchQuery(const std::vector<std::string>& object_keys) {
     if (storage_backend_) {
         for (size_t i = 0; i < response.size(); ++i) {
             if (!response[i]) {
-                if (auto desc_opt =
-                        storage_backend_->Querykey(object_keys[i])) {
-                    response[i] =
-                        std::vector<Replica::Descriptor>{std::move(*desc_opt)};
+                if (auto desc_opt = storage_backend_->Querykey(object_keys[i])) {
+                    response[i] = std::vector<Replica::Descriptor>{std::move(*desc_opt)};
                 }
             }
         }
@@ -417,6 +417,8 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         pending_transfers;
     std::vector<tl::expected<void, ErrorCode>> results(object_keys.size());
 
+    LOG(INFO) << "Parallel Submit Start";
+
     // Submit all transfers in parallel
     for (size_t i = 0; i < object_keys.size(); ++i) {
         const auto& key = object_keys[i];
@@ -469,6 +471,8 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         }
     }
 
+    LOG(INFO) << "Parallel Submit End";
+
     VLOG(1) << "BatchGet completed for " << object_keys.size() << " keys";
     return results;
 }
@@ -485,6 +489,7 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
+    client_config.preferred_storage_level = StorageLevel::CXL;
 
     // Start put operation
     auto start_result = master_client_.PutStart(key, slice_lengths, client_config);

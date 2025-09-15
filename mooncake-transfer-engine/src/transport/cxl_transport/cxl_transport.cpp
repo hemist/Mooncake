@@ -108,13 +108,13 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
         return -1; // validation failed
     }
     
-    /*
+    
     // Perform the memory copy
-    if (size < 32768)
-        std::memcpy(dest, src, size);
-    else
-        execute_copy_crc(dest, src, size);
-    */
+    // if (size < 32768)
+    //     std::memcpy(dest, src, size);
+    // else
+    //     execute_copy_crc(dest, src, size);
+    
     std::memcpy(dest, src, size);
 
     // Memory barriers and cache operations
@@ -176,6 +176,7 @@ int CxlTransport::cxlDevInit()
     }
     // DSA copy requires that memory has already undergone page faults
     memset((char*)ptr, 0, cxl_dev_size);
+    // LOG(INFO) << "Memset dsa base addrs";
     cxl_base_addr = ptr;
     close(fd);
     return 0;

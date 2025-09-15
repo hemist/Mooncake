@@ -1134,6 +1134,7 @@ std::vector<int> DistributedObjectStore::batch_put_from(
 std::vector<int> DistributedObjectStore::batch_get_into(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes) {
+    LOG(INFO) << "[GET-start] batch_get_into start";
     auto internal_results = batch_get_into_internal(keys, buffers, sizes);
     std::vector<int> results;
     results.reserve(internal_results.size());
@@ -1141,7 +1142,7 @@ std::vector<int> DistributedObjectStore::batch_get_into(
     for (const auto &result : internal_results) {
         results.push_back(to_py_ret(result));
     }
-
+    LOG(INFO) << "[GET-end] batch_get_into end";
     return results;
 }
 
@@ -1217,7 +1218,9 @@ DistributedObjectStore::batch_get_into_internal(
     }
 
     // Query metadata for all keys
+    LOG(INFO) << "[RPC-start] BatchQuery start";
     const auto query_results = client_->BatchQuery(keys);
+    LOG(INFO) << "[RPC-end] BatchQuery end";
 
     // Process each key individually and prepare for batch transfer
     struct ValidKeyInfo {
@@ -1318,8 +1321,10 @@ DistributedObjectStore::batch_get_into_internal(
     }
 
     // Execute batch transfer
+    LOG(INFO) << "[TRANSFER-start] batch transfer start";
     const auto batch_get_results =
         client_->BatchGet(batch_keys, batch_replica_lists, batch_slices);
+    LOG(INFO) << "[TRANSFER-end] batch transfer end";
 
     // Process transfer results
     for (size_t j = 0; j < batch_get_results.size(); ++j) {
