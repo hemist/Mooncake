@@ -10,6 +10,151 @@
 namespace mooncake {
 
 // ============================================================================
+// EngineWorkerPool Implementation
+// ============================================================================
+//to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
+constexpr int kDefaultEngineWorkers = 10;
+
+EngineWorkerPool::EngineWorkerPool(TransferEngine& engine) 
+    :shutdown_(false), engine_(engine) {
+    VLOG(1) << "Creating EngineWorkerPool with " << kDefaultEngineWorkers
+            << " workers";
+
+    // Start worker threads
+    workers_.reserve(kDefaultEngineWorkers);
+    for (int i = 0; i < kDefaultEngineWorkers; ++i) {
+        workers_.emplace_back(&EngineWorkerPool::workerThread, this);
+    }
+}
+
+EngineWorkerPool::~EngineWorkerPool() {
+    // Signal shutdown
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        shutdown_.store(true);
+    }
+    queue_cv_.notify_all();
+
+    // Wait for all workers to finish
+    for (auto& worker : workers_) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    VLOG(1) << "EngineWorkerPool destroyed";
+}
+
+void EngineWorkerPool::submitTask(EngineTask task) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (shutdown_.load()) {
+            LOG(WARNING)
+                << "Attempting to submit task to shutdown EngineWorkerPool";
+            task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+            return;
+        }
+        task_queue_.push(std::move(task));
+    }
+    queue_cv_.notify_one();
+}
+
+void EngineWorkerPool::workerThread() {
+    VLOG(2) << "EngineWorkerPool worker thread started";
+
+    while (true) {
+        EngineTask task({}, {}, Transport::TransferRequest::OpCode::READ, "", nullptr);
+
+        // Wait for task or shutdown signal
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this] {
+                return shutdown_.load() || !task_queue_.empty();
+            });
+
+            if (shutdown_.load() && task_queue_.empty()) {
+                break;
+            }
+
+            if (!task_queue_.empty()) {
+                task = std::move(task_queue_.front());
+                task_queue_.pop();
+            }
+        }
+
+        // Execute the task if we have one
+        if (task.state) {
+            try {
+                // Create transfer requests
+                std::vector<Transport::TransferRequest> requests;
+                requests.reserve(task.handles.size());
+                bool transfer_success = true;
+
+                for (size_t i = 0; i < task.handles.size(); ++i) {
+                    const auto& handle = task.handles[i];
+                    const auto& slice = task.slices[i];
+
+                    Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
+                    if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
+                        LOG(ERROR) << "Failed to open segment " << handle.segment_name_;
+                        task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+                        transfer_success = false;
+                        break;
+                    }
+
+                    Transport::TransferRequest request;
+                    request.opcode = task.op_code;
+                    request.source = static_cast<char*>(slice.ptr);
+                    request.target_id = seg;
+                    request.target_offset = handle.buffer_address_;
+                    request.length = handle.size_;
+
+                    requests.emplace_back(request);
+                }
+
+                // Allocate batch ID
+                BatchID batch_id;
+                if (transfer_success) {
+                    const size_t batch_size = requests.size();
+                    batch_id = engine_.allocateBatchID(batch_size);
+                    if (batch_id == Transport::INVALID_BATCH_ID) {
+                        LOG(ERROR) << "Failed to allocate batch ID";
+                        // task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+                        transfer_success = false;
+                    } else {
+                        task.state->setBatch(batch_id, batch_size);
+                    }
+                }
+
+                // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
+                if (transfer_success) { 
+                    // Submit transfer
+                    Status s = engine_.submitTransfer(batch_id, requests, task.proto);
+                    if (!s.ok()) {
+                        LOG(ERROR) << "Failed to submit all transfers, error code is "
+                                << s.code();
+                        // Note: batch_id will be freed by TransferEngineOperationState
+                        // destructor if we create the state object, otherwise we need to free
+                        // it here
+                        engine_.freeBatchID(batch_id);
+                        transfer_success = false;
+                    } else {
+                        VLOG(2) << "Transfer Engine task completed successfully with " 
+                                << task.handles.size() << " handles" ;
+                        // engine_.freeBatchID(batch_id);
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG(ERROR) << "Exception during async fileread: " << e.what();
+                // task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+            }
+        }
+    }
+
+    VLOG(2) << "FilereadWorkerPool worker thread exiting";
+}
+
+// ============================================================================
 // FilereadWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
@@ -354,6 +499,7 @@ TransferSubmitter::TransferSubmitter(TransferEngine& engine,
     : engine_(engine),
       local_hostname_(local_hostname),
       memcpy_pool_(std::make_unique<MemcpyWorkerPool>()),
+      engine_pool_(std::make_unique<EngineWorkerPool>(engine)),
       fileread_pool_(std::make_unique<FilereadWorkerPool>(backend)),
       level_protocols_(std::move(level_protocols)) {
     CHECK(!local_hostname_.empty()) << "Local hostname cannot be empty";
@@ -402,10 +548,8 @@ std::optional<TransferFuture> TransferSubmitter::submit(
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
-                LOG(INFO) << "LOCAL_MEMCPY";
                 return submitMemcpyOperation(handles, slices, op_code);
             case TransferStrategy::TRANSFER_ENGINE:
-                LOG(INFO) << "TRANSFER_ENGINE";
                 return submitTransferEngineOperation(handles, slices, op_code, proto);
             default:
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
@@ -464,58 +608,15 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     Transport::TransferRequest::OpCode op_code,
     std::string &proto) {
 
-    // Create transfer requests
-    std::vector<Transport::TransferRequest> requests;
-    requests.reserve(handles.size());
+    auto state = std::make_shared<TransferEngineOperationState>(engine_);
+    LOG(INFO) << "state: " << state; 
 
-    for (size_t i = 0; i < handles.size(); ++i) {
-        const auto& handle = handles[i];
-        const auto& slice = slices[i];
+    // Submit transfer operations to worker pool for async execution
+    EngineTask task(handles, slices, op_code, proto, state);
+    engine_pool_->submitTask(std::move(task));
 
-        // LOG(INFO) << "TransferTask protocol: " << proto << ", segment name: " << handle.segment_name_;
-
-        Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
-        if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
-            LOG(ERROR) << "Failed to open segment " << handle.segment_name_;
-            return std::nullopt;
-        }
-
-        Transport::TransferRequest request;
-        request.opcode = op_code;
-        request.source = static_cast<char*>(slice.ptr);
-        request.target_id = seg;
-        request.target_offset = handle.buffer_address_;
-        request.length = handle.size_;
-
-        requests.emplace_back(request);
-    }
-
-    // Allocate batch ID
-    const size_t batch_size = requests.size();
-    BatchID batch_id = engine_.allocateBatchID(batch_size);
-    if (batch_id == Transport::INVALID_BATCH_ID) {
-        LOG(ERROR) << "Failed to allocate batch ID";
-        return std::nullopt;
-    }
-
-    // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
-    // Submit transfer
-    Status s = engine_.submitTransfer(batch_id, requests, proto);
-    if (!s.ok()) {
-        LOG(ERROR) << "Failed to submit all transfers, error code is "
-                   << s.code();
-        // Note: batch_id will be freed by TransferEngineOperationState
-        // destructor if we create the state object, otherwise we need to free
-        // it here
-        engine_.freeBatchID(batch_id);
-        return std::nullopt;
-    }
-
-    // Create state with transfer engine context - no polling thread
-    // needed
-    auto state = std::make_shared<TransferEngineOperationState>(
-        engine_, batch_id, batch_size);
-
+    VLOG(1) << "Transfer engine task submitted to worker pool";
+    LOG(INFO) << "state: " << state; 
     return TransferFuture(state);
 }
 

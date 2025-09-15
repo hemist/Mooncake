@@ -124,6 +124,33 @@ class MemcpyOperationState : public OperationState {
     }
 };
 
+class EngineOperationState : public OperationState {
+   public:
+
+    bool is_completed() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return result_.has_value();
+    }
+
+    void set_completed(ErrorCode error_code) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            assert(!result_.has_value());
+            result_.emplace(error_code);
+        }
+        cv_.notify_all();
+    }
+
+    void wait_for_completion() override {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return result_.has_value(); });
+    }
+
+    TransferStrategy get_strategy() const override {
+        return TransferStrategy::TRANSFER_ENGINE;
+    }
+};
+
 class FilereadOperationState : public OperationState {
    public:
 
@@ -156,14 +183,22 @@ class FilereadOperationState : public OperationState {
  */
 class TransferEngineOperationState : public OperationState {
    public:
-    TransferEngineOperationState(TransferEngine& engine, BatchID batch_id,
-                                 size_t batch_size)
-        : engine_(engine), batch_id_(batch_id), batch_size_(batch_size) {
-        CHECK(batch_id_ != Transport::INVALID_BATCH_ID)
-            << "Invalid batch ID for transfer engine operation";
+    TransferEngineOperationState(TransferEngine& engine)
+        :engine_(engine), 
+         batch_id_(Transport::INVALID_BATCH_ID),
+         batch_size_(0) {
     }
 
-    ~TransferEngineOperationState() { engine_.freeBatchID(batch_id_); }
+    ~TransferEngineOperationState() {
+        if (batch_id_ != Transport::INVALID_BATCH_ID) {
+            LOG(INFO) << "Freeing batch ID " << batch_id_;
+            Status s = engine_.freeBatchID(batch_id_);
+            if (s != Status::OK()) {
+                LOG(ERROR) << s.ToString();
+            }
+
+        }
+    }
 
     bool is_completed() override;
 
@@ -171,6 +206,15 @@ class TransferEngineOperationState : public OperationState {
 
     TransferStrategy get_strategy() const override {
         return TransferStrategy::TRANSFER_ENGINE;
+    }
+
+    void setBatch(BatchID batch_id, size_t batch_size) {
+        batch_id_ = batch_id;
+        batch_size_ = batch_size;
+    }
+
+    void set_completed(ErrorCode error_code) {
+        set_result_internal(error_code);
     }
 
    private:
@@ -290,6 +334,53 @@ class MemcpyWorkerPool {
     std::atomic<bool> shutdown_;
 };
 
+struct EngineTask {
+    std::vector<AllocatedBuffer::Descriptor> handles;
+    std::vector<Slice> slices;
+    Transport::TransferRequest::OpCode op_code;
+    std::string proto;
+    std::shared_ptr<TransferEngineOperationState> state;
+
+    EngineTask(const std::vector<AllocatedBuffer::Descriptor> &handles,
+               const std::vector<Slice> &slices,
+               Transport::TransferRequest::OpCode op_code,
+               const std::string &proto,
+               std::shared_ptr<TransferEngineOperationState> s)
+        : handles(handles), 
+          slices(slices), 
+          op_code(op_code), 
+          proto(proto),
+          state(std::move(s)) {}
+};
+
+class EngineWorkerPool {
+   public:
+    explicit EngineWorkerPool(TransferEngine& engine);
+    ~EngineWorkerPool();
+
+    // Non-copyable, non-movable
+    EngineWorkerPool(const EngineWorkerPool&) = delete;
+    EngineWorkerPool& operator=(const EngineWorkerPool&) = delete;
+    EngineWorkerPool(EngineWorkerPool&&) = delete;
+    EngineWorkerPool& operator=(EngineWorkerPool&&) = delete;
+
+    /**
+     * @brief Submit a transfer engine task for async execution
+     * @param task The transfer engine task to execute
+     */
+    void submitTask(EngineTask task);
+
+   private:
+    void workerThread();
+
+    std::vector<std::thread> workers_;
+    std::queue<EngineTask> task_queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::atomic<bool> shutdown_;
+    TransferEngine& engine_;
+};
+
 /**
  * @brief Fileread task for async execution
  */
@@ -378,6 +469,7 @@ class TransferSubmitter {
     TransferEngine& engine_;
     const std::string local_hostname_;
     std::unique_ptr<MemcpyWorkerPool> memcpy_pool_;
+    std::unique_ptr<EngineWorkerPool> engine_pool_;
     std::unique_ptr<FilereadWorkerPool> fileread_pool_;
     bool memcpy_enabled_;
     // Store Level
