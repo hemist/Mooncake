@@ -13,7 +13,7 @@ namespace mooncake {
 // EngineWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
-constexpr int kDefaultEngineWorkers = 10;
+constexpr int kDefaultEngineWorkers = 20;
 
 EngineWorkerPool::EngineWorkerPool(TransferEngine& engine) 
     :shutdown_(false), engine_(engine) {
@@ -121,9 +121,10 @@ void EngineWorkerPool::workerThread() {
                         LOG(ERROR) << "Failed to allocate batch ID";
                         // task.state->set_completed(ErrorCode::TRANSFER_FAIL);
                         transfer_success = false;
-                    } else {
-                        task.state->setBatch(batch_id, batch_size);
-                    }
+                    } 
+                    // else {
+                    //     task.state->setBatch(batch_id, batch_size);
+                    // }
                 }
 
                 // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
@@ -131,17 +132,17 @@ void EngineWorkerPool::workerThread() {
                     // Submit transfer
                     Status s = engine_.submitTransfer(batch_id, requests, task.proto);
                     if (!s.ok()) {
-                        LOG(ERROR) << "Failed to submit all transfers, error code is "
-                                << s.code();
+                        LOG(ERROR) << "Failed to submit all transfers, error code is " << s.code();
                         // Note: batch_id will be freed by TransferEngineOperationState
                         // destructor if we create the state object, otherwise we need to free
                         // it here
+                        task.state->set_completed(ErrorCode::TRANSFER_FAIL);
                         engine_.freeBatchID(batch_id);
                         transfer_success = false;
                     } else {
-                        VLOG(2) << "Transfer Engine task completed successfully with " 
-                                << task.handles.size() << " handles" ;
-                        // engine_.freeBatchID(batch_id);
+                        // LOG(INFO) << "Transfer Engine task completed successfully with " << task.handles.size() << " handles" ;
+                        task.state->set_completed(ErrorCode::OK);
+                        engine_.freeBatchID(batch_id);
                     }
                 }
             } catch (const std::exception& e) {
@@ -548,8 +549,10 @@ std::optional<TransferFuture> TransferSubmitter::submit(
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
+                // LOG(INFO) << "LOCAL_MEMCPY";
                 return submitMemcpyOperation(handles, slices, op_code);
             case TransferStrategy::TRANSFER_ENGINE:
+                // LOG(INFO) << "TRANSFER_ENGINE";
                 return submitTransferEngineOperation(handles, slices, op_code, proto);
             default:
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
@@ -608,15 +611,15 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     Transport::TransferRequest::OpCode op_code,
     std::string &proto) {
 
-    auto state = std::make_shared<TransferEngineOperationState>(engine_);
-    LOG(INFO) << "state: " << state; 
+    auto state = std::make_shared<EngineOperationState>();
+    // LOG(INFO) << "state: " << state; 
 
     // Submit transfer operations to worker pool for async execution
     EngineTask task(handles, slices, op_code, proto, state);
     engine_pool_->submitTask(std::move(task));
 
     VLOG(1) << "Transfer engine task submitted to worker pool";
-    LOG(INFO) << "state: " << state; 
+    // LOG(INFO) << "state: " << state; 
     return TransferFuture(state);
 }
 

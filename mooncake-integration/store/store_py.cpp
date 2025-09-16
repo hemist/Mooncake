@@ -1211,7 +1211,7 @@ DistributedObjectStore::batch_get_into_internal(
     std::vector<tl::expected<int64_t, ErrorCode>> results;
     results.reserve(num_keys);
 
-    LOG(INFO) << "Start BatchGet, keys.size = " << num_keys;
+    LOG(INFO) << "Start BatchGet, keys_num = " << num_keys << ", buffer.size = " << sizes[0];
 
     if (num_keys == 0) {
         return results;
@@ -1288,7 +1288,7 @@ DistributedObjectStore::batch_get_into_internal(
             }
         }
 
-        LOG(INFO) << "Replica level: " << replica.get_storage_level();
+        LOG(INFO) << "Replica level: " << replica.get_storage_level() << ", size: " << total_size;
 
         // Store operation info for batch processing
         valid_operations.push_back({.key = key,

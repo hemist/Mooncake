@@ -229,47 +229,6 @@ bool CxlTransport::isAddressInCxlRange(void *addr) {
     return (ptr >= base && ptr < end);
 }
 
-#define ALIGNMENT (2 * 1024 * 1024) // devdax 2MB alignment
-void *do_mmap_by_anonymous_fixed(size_t obj_size, int dax_fd, size_t num_dimm, size_t len_dimm) {
-    void *addr_raw;
-    size_t i,j;
-    unsigned long offset, len;
-
-    /* check alignment ??? */
-
-    addr_raw = mmap(NULL, obj_size + ALIGNMENT, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    if (addr_raw == MAP_FAILED) {
-        printf("Mmap anonymous addr failed.");
-        return NULL;
-    }
-    //memset(addr_raw, 0, obj_size + ALIGNMENT);
-
-    uintptr_t addr_int = (uintptr_t) addr_raw;
-    uintptr_t aligned_addr_int = (addr_int + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-    void * aligned_begin = (void *) aligned_addr_int;
-
-    void *cur_p = aligned_begin;
-
-    printf("Anonymous mmap addr: %p\n", aligned_begin);
-
-    size_t ext_num = (obj_size + ALIGNMENT)/(num_dimm*ALIGNMENT);
-    for (i = 0; i < ext_num; i++) {
-        offset = ALIGNMENT*i;
-        len = ALIGNMENT;
-
-        for(j = 0; j < num_dimm; j++) {
-            void *addr_tmp = mmap(cur_p, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, dax_fd, len_dimm*j + offset);
-            if (addr_tmp == MAP_FAILED) {
-                printf("Mmap1 extents[%ld] { offset(%lu), len(%lu) } failed.%s\n", i, offset, len, strerror(errno));
-                return NULL;
-            }
-            cur_p = (void*)((char*)cur_p + len);
-        }
-    }
-
-    printf("Anonymous mmap addr: %p\n", aligned_begin);
-    return aligned_begin;
-}
 
 int CxlTransport::cxlDevInit()
 {
@@ -279,9 +238,8 @@ int CxlTransport::cxlDevInit()
         return -1;
     }
 
-    // void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     // LOG(INFO) << "CxlTransport: use normal mmap.";
-    void* ptr = do_mmap_by_anonymous_fixed(cxl_dev_size, fd, 2, 137438953472);
     LOG(INFO) << "CxlTransport: use fixed mmap.";
     if (ptr == MAP_FAILED) {
         close(fd);

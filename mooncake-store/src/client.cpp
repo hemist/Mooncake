@@ -442,12 +442,13 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
             continue;
         }
 
+        // LOG(INFO) << "Before transfer submit";
         // Submit transfer operation asynchronously
         auto future = transfer_submitter_->submit(replica, slices_it->second,
                                                   TransferRequest::READ);
+        // LOG(INFO) << "After transfer submit";
         if (!future) {
-            LOG(ERROR) << "Failed to submit transfer operation for key: "
-                       << key;
+            LOG(ERROR) << "Failed to submit transfer operation for key: " << key;
             results[i] = tl::unexpected(ErrorCode::TRANSFER_FAIL);
             continue;
         }
@@ -458,12 +459,13 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         pending_transfers.emplace_back(i, key, std::move(*future));
     }
 
+    LOG(INFO) << "Now Waiting for transfers complete.";
+
     // Wait for all transfers to complete
     for (auto& [index, key, future] : pending_transfers) {
         ErrorCode result = future.get();
         if (result != ErrorCode::OK) {
-            LOG(ERROR) << "Transfer failed for key: " << key
-                       << " with error: " << static_cast<int>(result);
+            LOG(ERROR) << "Transfer failed for key: " << key << " with error: " << static_cast<int>(result);
             results[index] = tl::unexpected(result);
         } else {
             VLOG(1) << "Transfer completed successfully for key: " << key;
@@ -471,7 +473,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         }
     }
 
-    LOG(INFO) << "Parallel Submit End";
+    LOG(INFO) << "Parallel Submit End, " << "BatchGet completed for " << object_keys.size() << " keys";;
 
     VLOG(1) << "BatchGet completed for " << object_keys.size() << " keys";
     return results;

@@ -191,11 +191,11 @@ class TransferEngineOperationState : public OperationState {
 
     ~TransferEngineOperationState() {
         if (batch_id_ != Transport::INVALID_BATCH_ID) {
-            LOG(INFO) << "Freeing batch ID " << batch_id_;
+            // LOG(INFO) << "Freeing batch ID " << batch_id_;
             Status s = engine_.freeBatchID(batch_id_);
-            if (s != Status::OK()) {
-                LOG(ERROR) << s.ToString();
-            }
+            // if (s != Status::OK()) {
+            //     LOG(ERROR) << s.ToString();
+            // }
 
         }
     }
@@ -339,13 +339,13 @@ struct EngineTask {
     std::vector<Slice> slices;
     Transport::TransferRequest::OpCode op_code;
     std::string proto;
-    std::shared_ptr<TransferEngineOperationState> state;
+    std::shared_ptr<EngineOperationState> state;
 
     EngineTask(const std::vector<AllocatedBuffer::Descriptor> &handles,
                const std::vector<Slice> &slices,
                Transport::TransferRequest::OpCode op_code,
                const std::string &proto,
-               std::shared_ptr<TransferEngineOperationState> s)
+               std::shared_ptr<EngineOperationState> s)
         : handles(handles), 
           slices(slices), 
           op_code(op_code), 

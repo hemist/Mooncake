@@ -75,7 +75,7 @@ class CXLTransportTest : public ::testing::Test {
     void **args;
     mooncake::Transport::SegmentID segment_id;
     std::shared_ptr<TransferMetadata::SegmentDesc> segment_desc;
-    const size_t kDataLength = 4 * 1024;
+    // const size_t kDataLength = 4 * 1024;
     std::unordered_map<std::string, std::vector<mooncake::TransferEngine::RegisteredBuffer>> buffer_map;
     const size_t kDataLength = 4 * 1024 * 1024;
 #ifdef USE_CXL_CUDA
