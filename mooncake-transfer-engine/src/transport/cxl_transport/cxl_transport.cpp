@@ -229,7 +229,6 @@ bool CxlTransport::isAddressInCxlRange(void *addr) {
     return (ptr >= base && ptr < end);
 }
 
-
 int CxlTransport::cxlDevInit()
 {
     int fd = open(cxl_dev_path, O_RDWR);

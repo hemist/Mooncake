@@ -366,7 +366,7 @@ auto MasterService::PutStart(const std::string& key,
         total_length += slice_lengths[i];
     }
 
-    VLOG(1) << "key=" << key << ", value_length=" << total_length
+    LOG(INFO) << "key=" << key << ", value_length=" << total_length
             << ", slice_count=" << slice_lengths.size() << ", config=" << config
             << ", action=put_start_begin";
 
@@ -390,6 +390,9 @@ auto MasterService::PutStart(const std::string& key,
         return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
     }
 
+
+    LOG(INFO) << "key=" << key << ", config=" << config << ", action=allocate_replica_begin";
+
     // Allocate replicas
     std::vector<Replica> replicas;
     replicas.reserve(client_config.replica_num);
@@ -409,7 +412,7 @@ auto MasterService::PutStart(const std::string& key,
                     allocators, allocators_by_name, chunk_size, client_config);
 
                 if (!handle) {
-                    // LOG(ERROR) << "key=" << key << ", replica_id=" << i << ", slice_index=" << j << ", error=allocation_failed";
+                    LOG(ERROR) << "key=" << key << ", replica_id=" << i << ", slice_index=" << j << ", error=allocation_failed";
                     // If the allocation failed, we need to evict some objects
                     // to free up space for future allocations.
                     need_eviction_ = true;
