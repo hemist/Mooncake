@@ -153,6 +153,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
         if (allocators.size() <= 0) {
             return nullptr;
         }
+        LOG(INFO) << "In Allocate, config: " << config;
 
         if (config.preferred_storage_level == StorageLevel::RAM) {
             return TryPreferredAllocate(allocators_by_name, objectSize, config);

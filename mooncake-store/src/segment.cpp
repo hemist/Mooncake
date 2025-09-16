@@ -311,7 +311,9 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
         return ErrorCode::SEGMENT_NOT_FOUND;
     }
 
-    int preferred_level = static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
+    int preferred_level = 
+        static_cast<int>(config.preferred_storage_level);
+        // static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
     for (const auto& segment_id : it->second) {
         auto segment_it = mounted_segments_.find(segment_id);
         if (segment_it == mounted_segments_.end()) {
@@ -320,11 +322,17 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
 
         // Find the preferred segment for the client, 
         // which is the one with the lowest level
+        
+        // Segment& segment = segment_it->second.segment;
+        // int current_level = static_cast<int>(segment.level);
+        // if (current_level < preferred_level) {
+        //     config.preferred_segment = segment.name;
+        //     preferred_level = current_level;
+        // }
+
         Segment& segment = segment_it->second.segment;
-        int current_level = static_cast<int>(segment.level);
-        if (current_level < preferred_level) {
+        if (config.preferred_storage_level == segment.level) {
             config.preferred_segment = segment.name;
-            preferred_level = current_level;
         }
 
         // Cxl level allows just one replica
