@@ -121,6 +121,7 @@ class DistributedObjectStore {
      * register_buffer() for zero-copy operations
      */
     int get_into(const std::string &key, void *buffer, size_t size);
+    int get_into_cxl(const std::string &key, void *buffer, size_t size);
 
     /**
      * @brief Get object data directly into pre-allocated buffers for multiple
@@ -149,6 +150,10 @@ class DistributedObjectStore {
      */
     int put_from(const std::string &key, void *buffer, size_t size,
                  const ReplicateConfig &config = ReplicateConfig{});
+
+    int put_from_cxl(const std::string &key, void *buffer, size_t size);
+    tl::expected<void, ErrorCode> put_from_cxl_internal(
+        const std::string &key, void *buffer, size_t size);
 
     /**
      * @brief Put object data directly from pre-allocated buffers for multiple
@@ -288,6 +293,8 @@ class DistributedObjectStore {
     tl::expected<int64_t, ErrorCode> get_into_internal(const std::string &key,
                                                        void *buffer,
                                                        size_t size);
+    tl::expected<int64_t, ErrorCode> get_into_cxl_internal(
+        const std::string &key, void *buffer, size_t size);
 
     std::vector<tl::expected<int64_t, ErrorCode>> batch_get_into_internal(
         const std::vector<std::string> &keys,
