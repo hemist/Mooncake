@@ -556,7 +556,7 @@ std::optional<TransferFuture> TransferSubmitter::submit(
                 return std::nullopt;
         }
     }else{
-        LOG(INFO) << "FILE transfer";
+        // LOG(INFO) << "FILE transfer";
         return submitFileReadOperation(replica, slices, op_code);
     }
 }
