@@ -426,8 +426,10 @@ Status CxlTransport::submitTransfer(
     return Status::OK();
 }
 
+/*
 Status CxlTransport::submitTransferTask(
     const std::vector<TransferTask *> &task_list) {
+    LOG(INFO) << "CxlTransport::submitTransferTask";
     for (size_t index = 0; index < task_list.size(); ++index) {
         assert(task_list[index]);
         auto &task = *task_list[index];
@@ -447,6 +449,7 @@ Status CxlTransport::submitTransferTask(
         task.slice_list.push_back(slice);
         __sync_fetch_and_add(&task.slice_count, 1);
         int err;
+        LOG(INFO) << "Do real memcpy Start";
         if (slice->opcode == TransferRequest::READ)
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
@@ -455,11 +458,46 @@ Status CxlTransport::submitTransferTask(
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
                              slice->length);
+        LOG(INFO) << "Do real memcpy End";
         if (err != 0)
             slice->markFailed();
         else
             slice->markSuccess();
     }
+    LOG(INFO) << "CxlTransport::submitTransferTask done";
+    return Status::OK();
+}
+*/
+
+Status CxlTransport::submitTransferTask(
+    const std::vector<TransferTask *> &task_list) {
+    // LOG(INFO) << "CxlTransport::submitTransferTask";
+    for (size_t index = 0; index < task_list.size(); ++index) {
+        assert(task_list[index]);
+        auto &task = *task_list[index];
+        assert(task.request);
+        auto &request = *task.request;
+        uint64_t dest_cxl_offset = request.target_offset;
+        task.total_bytes = request.length;
+        
+        __sync_fetch_and_add(&task.slice_count, 1);
+        int err;
+        // LOG(INFO) << "Do real memcpy Start";
+        if (request.opcode == TransferRequest::READ)
+            //READ: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy((char *)request.source, (void *)((char *)cxl_base_addr + dest_cxl_offset),
+                             request.length);
+        else
+            //WRITE: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy((void *)((char *)cxl_base_addr + dest_cxl_offset), (char *)request.source,
+                             request.length);
+        // LOG(INFO) << "Do real memcpy End";
+        if (err != 0)
+            task.status = TransferStatusEnum::FAILED;
+        else
+            task.status = TransferStatusEnum::COMPLETED;
+    }
+    // LOG(INFO) << "CxlTransport::submitTransferTask done";
     return Status::OK();
 }
 

@@ -114,8 +114,9 @@ void EngineWorkerPool::workerThread() {
 
                 // Allocate batch ID
                 BatchID batch_id;
+                size_t batch_size;
                 if (transfer_success) {
-                    const size_t batch_size = requests.size();
+                    batch_size = requests.size();
                     batch_id = engine_.allocateBatchID(batch_size);
                     if (batch_id == Transport::INVALID_BATCH_ID) {
                         LOG(ERROR) << "Failed to allocate batch ID";
@@ -130,6 +131,7 @@ void EngineWorkerPool::workerThread() {
                 // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
                 if (transfer_success) { 
                     // Submit transfer
+                    // LOG(INFO) << "Before submitTransfer";
                     Status s = engine_.submitTransfer(batch_id, requests, task.proto);
                     if (!s.ok()) {
                         LOG(ERROR) << "Failed to submit all transfers, error code is " << s.code();
@@ -137,13 +139,44 @@ void EngineWorkerPool::workerThread() {
                         // destructor if we create the state object, otherwise we need to free
                         // it here
                         task.state->set_completed(ErrorCode::TRANSFER_FAIL);
-                        engine_.freeBatchID(batch_id);
+                        // engine_.freeBatchID(batch_id);
                         transfer_success = false;
-                    } else {
-                        // LOG(INFO) << "Transfer Engine task completed successfully with " << task.handles.size() << " handles" ;
-                        task.state->set_completed(ErrorCode::OK);
-                        engine_.freeBatchID(batch_id);
+                    } 
+                    
+                    // else {
+                    //     // LOG(INFO) << "Transfer Engine task completed successfully with " << task.handles.size() << " handles" ;
+                    //     task.state->set_completed(ErrorCode::OK);
+                    //     engine_.freeBatchID(batch_id);
+                    // }
+
+                    else {
+                        for (int task_id = 0; task_id < batch_size; ++task_id) {
+                            bool completed = false;
+                            TransferStatus status;
+                            while(!completed) {
+                                // LOG(INFO) << "Before getTransferStatus with batch_id: " << batch_id;
+                                s = engine_.getTransferStatus(batch_id, task_id, status);
+                                // if (status.s == TransferStatusEnum::COMPLETED || status.s == TransferStatusEnum::FAILED)
+                                // LOG(INFO) << "After getTransferStatus";
+                                
+                                if (!s.ok()) {
+                                    completed = true;
+                                    task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+                                } else {
+                                    if (status.s == TransferStatusEnum::COMPLETED) {
+                                        completed = true;
+                                        task.state->set_completed(ErrorCode::OK);
+                                    } else if (status.s == TransferStatusEnum::FAILED) {
+                                        LOG(INFO) << "Transfer Failed";
+                                        completed = true;
+                                        task.state->set_completed(ErrorCode::TRANSFER_FAIL);
+                                    }
+                                }
+                            }
+                        }
                     }
+
+                    engine_.freeBatchID(batch_id);
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR) << "Exception during async fileread: " << e.what();
@@ -159,7 +192,7 @@ void EngineWorkerPool::workerThread() {
 // FilereadWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
-constexpr int kDefaultFilereadWorkers = 10;
+constexpr int kDefaultFilereadWorkers = 20;
 
 FilereadWorkerPool::FilereadWorkerPool(std::shared_ptr<StorageBackend>& backend) : shutdown_(false) {
     VLOG(1) << "Creating FilereadWorkerPool with " << kDefaultFilereadWorkers

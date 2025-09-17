@@ -78,6 +78,7 @@ Status MultiTransport::freeBatchID(BatchID batch_id) {
 Status MultiTransport::submitTransfer(BatchID batch_id, 
                                       const std::vector<TransferRequest> &entries,
                                       std::string &proto) {
+    // LOG(INFO) << "MultiTransport::submitTransfer";
     auto &batch_desc = *((BatchDesc *)(batch_id));
     if (batch_desc.task_list.size() + entries.size() > batch_desc.batch_size) {
         return Status::TooManyRequests(
@@ -89,6 +90,7 @@ Status MultiTransport::submitTransfer(BatchID batch_id,
 
     std::unordered_map<Transport *, std::vector<Transport::TransferTask *> >
         submit_tasks;
+    // LOG(INFO) << "Before selectTransport";
     for (auto &request : entries) {
         Transport *transport = nullptr;
         auto status = selectTransport(request, transport, proto);
@@ -100,6 +102,7 @@ Status MultiTransport::submitTransfer(BatchID batch_id,
         ++task_id;
         submit_tasks[transport].push_back(&task);
     }
+    // LOG(INFO) << "Before real submitTransferTask";
     Status overall_status = Status::OK();
     for (auto &entry : submit_tasks) {
         auto status = entry.first->submitTransferTask(entry.second);
@@ -112,6 +115,20 @@ Status MultiTransport::submitTransfer(BatchID batch_id,
     return overall_status;
 }
 
+Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
+                                         TransferStatus &status) {
+    auto &batch_desc = *((BatchDesc *)(batch_id));
+    const size_t task_count = batch_desc.task_list.size();
+    if (task_id >= task_count) {
+        return Status::InvalidArgument("Task ID out of range");
+    }
+    auto &task = batch_desc.task_list[task_id];
+    status.transferred_bytes = task.transferred_bytes;
+    status.s = task.status;
+    return Status::OK();
+}
+
+/*
 Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
                                          TransferStatus &status) {
     auto &batch_desc = *((BatchDesc *)(batch_id));
@@ -150,6 +167,7 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
     }
     return Status::OK();
 }
+*/
 
 Status MultiTransport::getBatchTransferStatus(BatchID batch_id, TransferStatus &status) {
     auto &batch_desc = *((BatchDesc *)(batch_id));
@@ -235,17 +253,17 @@ Transport *MultiTransport::installTransport(const std::string &proto,
 Status MultiTransport::selectTransport(const TransferRequest &entry,
                                        Transport *&transport,
                                        std::string &preferred_proto) {
-    auto target_segment_desc = metadata_->getSegmentDescByID(entry.target_id);
-    if (!target_segment_desc) {
-        return Status::InvalidArgument("Invalid target segment ID " +
-                                       std::to_string(entry.target_id));
-    }
-    auto protos = target_segment_desc->protocol;
-    if (std::find(protos.begin(), protos.end(), preferred_proto) == protos.end() 
-        || !transport_map_.count(preferred_proto)) {
-        return Status::NotSupportedTransport("Transport " + preferred_proto +
-                                             " not installed");
-    }
+    // auto target_segment_desc = metadata_->getSegmentDescByID(entry.target_id);
+    // if (!target_segment_desc) {
+    //     return Status::InvalidArgument("Invalid target segment ID " +
+    //                                    std::to_string(entry.target_id));
+    // }
+    // auto protos = target_segment_desc->protocol;
+    // if (std::find(protos.begin(), protos.end(), preferred_proto) == protos.end() 
+    //     || !transport_map_.count(preferred_proto)) {
+    //     return Status::NotSupportedTransport("Transport " + preferred_proto +
+    //                                          " not installed");
+    // }
     transport = transport_map_[preferred_proto].get();
     return Status::OK();
 }

@@ -195,6 +195,7 @@ class Transport {
         volatile bool is_finished = false;
         uint64_t total_bytes = 0;
         BatchID batch_id = 0;
+        TransferStatusEnum status;
 
         // record the origin request
         const TransferRequest *request = nullptr;

@@ -144,6 +144,7 @@ class TransferEngine {
     Status submitTransfer(BatchID batch_id,
                           const std::vector<TransferRequest> &entries,
                           std::string &proto) {
+        // LOG(INFO) << "TransferEngine submitTransfer";
         return multi_transports_->submitTransfer(batch_id, entries, proto);
     }
 
@@ -174,8 +175,10 @@ class TransferEngine {
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status) {
-        Status result =
-            multi_transports_->getTransferStatus(batch_id, task_id, status);
+        // LOG(INFO) << "Before getTransferStatus";
+
+        Status result = multi_transports_->getTransferStatus(batch_id, task_id, status);
+        // LOG(INFO) << "After getTransferStatus";
 #ifdef WITH_METRICS
         if (result.ok() && status.s == TransferStatusEnum::COMPLETED) {
             if (status.transferred_bytes > 0) {
