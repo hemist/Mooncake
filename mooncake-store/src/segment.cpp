@@ -311,9 +311,9 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
         return ErrorCode::SEGMENT_NOT_FOUND;
     }
 
-    int preferred_level = 
-        static_cast<int>(config.preferred_storage_level);
-        // static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
+    bool prefer_level_found = false;
+    int preferred_level = static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
+    std::string preferred_segment = "";
     for (const auto& segment_id : it->second) {
         auto segment_it = mounted_segments_.find(segment_id);
         if (segment_it == mounted_segments_.end()) {
@@ -331,16 +331,29 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
         // }
 
         Segment& segment = segment_it->second.segment;
-        if (config.preferred_storage_level == segment.level) {
-            config.preferred_segment = segment.name;
+        int current_level = static_cast<int>(segment.level);
+        if (current_level < preferred_level) {
+            preferred_segment = segment.name;
+            preferred_level = current_level;
         }
 
-        // Cxl level allows just one replica
-        if (preferred_level == static_cast<int>(StorageLevel::CXL)) {
-            config.replica_num = 1;
+        if (config.preferred_storage_level == segment.level) {
+            prefer_level_found = true;
+            config.preferred_segment = segment.name;
+            break;
         }
     }
-    config.preferred_storage_level = static_cast<StorageLevel>(preferred_level);
+
+    if (!prefer_level_found) {
+        config.preferred_storage_level = static_cast<StorageLevel>(preferred_level);
+        config.preferred_segment = preferred_segment;
+    }
+
+    // Cxl level allows just one replica
+    if (config.preferred_storage_level == StorageLevel::CXL) {
+        config.replica_num = 1;
+    }
+
     return ErrorCode::OK;
 }
 
