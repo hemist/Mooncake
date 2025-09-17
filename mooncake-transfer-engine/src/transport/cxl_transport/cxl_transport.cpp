@@ -78,27 +78,42 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
         return -2;
     }
     // Run operation
-    auto handler = dml::submit<dml::software>(dml::copy_crc,
-                                                dml::make_view(c_src, size),
-                                                dml::make_view(c_dst, size),
-                                                crc_seed);
-    // Wait for the result
-    int i = 0;
-    do {
-        auto result = handler.get();
-        if (result.status == dml::status_code::ok)
-        {
-            //LOG(ERROR) << "DSA copy ok:"<< ++i << std::endl;
-            return 0;
-        } else if (result.status == dml::status_code::partial_completion) {
-            LOG(ERROR) << "DSA copy partial_completion:"<< ++i << std::endl;
-            continue;
-        } else {
-            LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
-            return -1;
-        }
-    } while(true);
-    return -1;
+    // auto handler = dml::submit<dml::software>(dml::copy_crc,
+    //                                             dml::make_view(c_src, size),
+    //                                             dml::make_view(c_dst, size),
+    //                                             crc_seed);
+    // // Wait for the result
+    // int i = 0;
+    // do {
+    //     auto result = handler.get();
+    //     if (result.status == dml::status_code::ok)
+    //     {
+    //         //LOG(ERROR) << "DSA copy ok:"<< ++i << std::endl;
+    //         return 0;
+    //     } else if (result.status == dml::status_code::partial_completion) {
+    //         LOG(ERROR) << "DSA copy partial_completion:"<< ++i << std::endl;
+    //         continue;
+    //     } else {
+    //         LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
+    //         return -1;
+    //     }
+    // } while(true);
+    // return -1;
+
+    auto result = dml::execute<dml::hardware>(dml::copy_crc, dml::make_view(c_src, size),
+                    dml::make_view(c_dst, size), crc_seed);
+
+    // Check result
+    if (result.status == dml::status_code::ok) {
+        //LOG(INFO) << "DSA copy successed. from " << src << " to " << dest << " len:" << size;
+        return 0;
+    }
+    else {
+        LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
+        //LOG(INFO) << "DSA copy failed. from " << src << " to " << dest << " len:" << size;
+        return -1;
+    }
+    return 0;
 }
 
 
@@ -118,8 +133,10 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     // Perform the memory copy
     if (size < 32768)
         std::memcpy(dest, src, size);
-    else
+    else {
+        // LOG(INFO) << "DSA!";
         execute_copy_crc(dest, src, size);
+    }
     
     // std::memcpy(dest, src, size);
 

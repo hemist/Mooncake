@@ -546,6 +546,8 @@ std::optional<TransferFuture> TransferSubmitter::submit(
         TransferStrategy strategy = selectStrategy(handles, slices);
         std::string proto = level_protocols_[replica.get_storage_level()];
 
+        LOG(INFO) << "strategy = " << strategy << ", proto = " << proto;
+
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
                 return submitMemcpyOperation(handles, slices, op_code);
@@ -619,6 +621,72 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     // LOG(INFO) << "state: " << state; 
     return TransferFuture(state);
 }
+
+
+
+/*
+std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
+    const std::vector<AllocatedBuffer::Descriptor>& handles,
+    std::vector<Slice>& slices, 
+    Transport::TransferRequest::OpCode op_code,
+    std::string &proto) {
+
+    // Create transfer requests
+    std::vector<Transport::TransferRequest> requests;
+    requests.reserve(handles.size());
+
+    for (size_t i = 0; i < handles.size(); ++i) {
+        const auto& handle = handles[i];
+        const auto& slice = slices[i];
+
+        LOG(INFO) << "TransferTask protocol: " << proto << ", segment name: " << handle.segment_name_;
+
+        Transport::SegmentHandle seg = engine_.openSegment(handle.segment_name_);
+        if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
+            LOG(ERROR) << "Failed to open segment " << handle.segment_name_;
+            return std::nullopt;
+        }
+
+        Transport::TransferRequest request;
+        request.opcode = op_code;
+        request.source = static_cast<char*>(slice.ptr);
+        request.target_id = seg;
+        request.target_offset = handle.buffer_address_;
+        request.length = handle.size_;
+
+        requests.emplace_back(request);
+    }
+
+    // Allocate batch ID
+    const size_t batch_size = requests.size();
+    BatchID batch_id = engine_.allocateBatchID(batch_size);
+    if (batch_id == Transport::INVALID_BATCH_ID) {
+        LOG(ERROR) << "Failed to allocate batch ID";
+        return std::nullopt;
+    }
+
+    LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
+    // Submit transfer
+    Status s = engine_.submitTransfer(batch_id, requests, proto);
+    if (!s.ok()) {
+        LOG(ERROR) << "Failed to submit all transfers, error code is "
+                   << s.code();
+        // Note: batch_id will be freed by TransferEngineOperationState
+        // destructor if we create the state object, otherwise we need to free
+        // it here
+        engine_.freeBatchID(batch_id);
+        return std::nullopt;
+    }
+
+    // Create state with transfer engine context - no polling thread
+    // needed
+    auto state = std::make_shared<TransferEngineOperationState>(
+        engine_);
+    state->setBatch(batch_id, batch_size);
+
+    return TransferFuture(state);
+}
+*/
 
 std::optional<TransferFuture> TransferSubmitter::submitFileReadOperation(
     const Replica::Descriptor& replica, std::vector<Slice>& slices, 
