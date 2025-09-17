@@ -191,11 +191,11 @@ class TransferEngineOperationState : public OperationState {
 
     ~TransferEngineOperationState() {
         if (batch_id_ != Transport::INVALID_BATCH_ID) {
-            LOG(INFO) << "Freeing batch ID " << batch_id_;
+            // LOG(INFO) << "Freeing batch ID " << batch_id_;
             Status s = engine_.freeBatchID(batch_id_);
-            if (s != Status::OK()) {
-                LOG(ERROR) << s.ToString();
-            }
+            // if (s != Status::OK()) {
+            //     LOG(ERROR) << s.ToString();
+            // }
 
         }
     }

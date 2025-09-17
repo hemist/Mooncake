@@ -609,14 +609,14 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     std::string &proto) {
 
     auto state = std::make_shared<TransferEngineOperationState>(engine_);
-    LOG(INFO) << "state: " << state; 
+    // LOG(INFO) << "state: " << state; 
 
     // Submit transfer operations to worker pool for async execution
     EngineTask task(handles, slices, op_code, proto, state);
     engine_pool_->submitTask(std::move(task));
 
     VLOG(1) << "Transfer engine task submitted to worker pool";
-    LOG(INFO) << "state: " << state; 
+    // LOG(INFO) << "state: " << state; 
     return TransferFuture(state);
 }
 
