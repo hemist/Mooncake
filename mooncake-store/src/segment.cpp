@@ -311,29 +311,51 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
     if (it == client_segments_.end()) {
         return ErrorCode::SEGMENT_NOT_FOUND;
     }
-
-    int preferred_level = static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
-    for (const auto& segment_id : it->second) {
-        auto segment_it = mounted_segments_.find(segment_id);
-        if (segment_it == mounted_segments_.end()) {
+    
+    int preferred_level;
+    if(config.preferred_storage_level == StorageLevel::CXL){
+        preferred_level = static_cast<int>(StorageLevel::CXL);
+        for(const auto& segment_id : it->second){
+            auto segment_it = mounted_segments_.find(segment_id);
+            if(segment_it == mounted_segments_.end()){
+                return ErrorCode::SEGMENT_NOT_FOUND;
+            }
+            Segment& segment = segment_it->second.segment;
+            // Find the cxl segment for the client
+            if(segment.level == StorageLevel::CXL){
+                config.preferred_segment = segment.name;
+                break;
+            }
+        }
+        if(config.preferred_segment.empty()){
+            LOG(ERROR) << "Client" <<config.client_id<<" has no CXL segment mounted";
             return ErrorCode::SEGMENT_NOT_FOUND;
         }
+    }else{
+        preferred_level = static_cast<int>(StorageLevel::NUM_STORAGE_LEVELS);
+        for (const auto& segment_id : it->second) {
+            auto segment_it = mounted_segments_.find(segment_id);
+            if (segment_it == mounted_segments_.end()) {
+                return ErrorCode::SEGMENT_NOT_FOUND;
+            }
 
-        // Find the preferred segment for the client, 
-        // which is the one with the lowest level
-        Segment& segment = segment_it->second.segment;
-        int current_level = static_cast<int>(segment.level);
-        if (current_level < preferred_level) {
-            config.preferred_segment = segment.name;
-            preferred_level = current_level;
-        }
+            // Find the preferred segment for the client, 
+            // which is the one with the lowest level
+            Segment& segment = segment_it->second.segment;
+            int current_level = static_cast<int>(segment.level);
+            if (current_level < preferred_level) {
+                config.preferred_segment = segment.name;
+                preferred_level = current_level;
+            }
 
-        // Cxl level allows just one replica
-        if (preferred_level == static_cast<int>(StorageLevel::CXL)) {
-            config.replica_num = 1;
+            // Cxl level allows just one replica
+            if (preferred_level == static_cast<int>(StorageLevel::CXL)) {
+                config.replica_num = 1;
+            }
         }
+        config.preferred_storage_level = static_cast<StorageLevel>(preferred_level);
     }
-    config.preferred_storage_level = static_cast<StorageLevel>(preferred_level);
+    
     return ErrorCode::OK;
 }
 

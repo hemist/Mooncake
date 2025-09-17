@@ -328,6 +328,11 @@ Status CxlTransport::submitTransfer(
         slice->target_id = request.target_id;
         slice->status = Slice::PENDING;
         __sync_fetch_and_add(&task.slice_count, 1);
+        LOG(INFO) << "[CXL] opcode=" << (slice->opcode == TransferRequest::READ ? "READ" : "WRITE")
+          << " cxl_base=0x" << std::hex << cxl_base_addr
+          << " offset=0x" << dest_cxl_offset
+          << " dest=0x" << slice->cxl.dest_addr
+          << " length=" << std::dec << slice->length;
         int err;
         if (slice->opcode == TransferRequest::READ)
             //READ: Source is in local memory, Destination is on CXL
