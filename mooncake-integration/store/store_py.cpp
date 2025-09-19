@@ -1113,7 +1113,7 @@ int DistributedObjectStore::get_into(const std::string &key, void *buffer,
 }
 
 //Read data from the first replica at the CXL storage level
-tl::expected<int64_t, ErrorCode> DistributedObjectStore::get_into_cxl_internal(
+tl::expected<int64_t, ErrorCode> DistributedObjectStore::get_into_from_cxl_internal(
     const std::string &key, void *buffer, size_t size) {
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
@@ -1139,7 +1139,8 @@ tl::expected<int64_t, ErrorCode> DistributedObjectStore::get_into_cxl_internal(
         LOG(ERROR) << "Internal error: replica_list is empty";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
-    LOG(INFO) << "[get_into_cxl] key=" << key << " replica_count=" << replica_list.size();
+    LOG(INFO) << "[get_into_from_cxl] key=" << key << " replica_count=" << replica_list.size();
+
     for (const auto &rep : replica_list) {
         LOG(INFO) << "  replica storage_level=" << static_cast<int>(rep.storage_level)
         << " (0=RAM 1=CXL 2=SSD)";
@@ -1155,7 +1156,7 @@ tl::expected<int64_t, ErrorCode> DistributedObjectStore::get_into_cxl_internal(
     }
 
     if (cxl_replica.empty()) { 
-    LOG(ERROR) << "No CXL StorageLevel replica found for key: " << key;
+        LOG(ERROR) << "No CXL StorageLevel replica found for key: " << key;
         return tl::unexpected(ErrorCode::INVALID_REPLICA);
     }
 
@@ -1200,9 +1201,9 @@ tl::expected<int64_t, ErrorCode> DistributedObjectStore::get_into_cxl_internal(
     return static_cast<int64_t>(total_size);
 }
 
-int DistributedObjectStore::get_into_cxl(const std::string &key, void *buffer,
+int DistributedObjectStore::get_into_from_cxl(const std::string &key, void *buffer,
                                      size_t size) {
-    return to_py_ret(get_into_cxl_internal(key, buffer, size));
+    return to_py_ret(get_into_from_cxl_internal(key, buffer, size));
 }
 
 std::string DistributedObjectStore::get_hostname() const {
@@ -1224,6 +1225,30 @@ std::vector<int> DistributedObjectStore::batch_put_from(
     return results;
 }
 
+std::vector<int> DistributedObjectStore::batch_put_from_into_cxl(
+    const std::vector<std::string> &keys, 
+    const std::vector<void *> &buffers,
+    const std::vector<size_t> &sizes) {
+
+    // Configure CXL as preferred storage level
+    ReplicateConfig cxlconfig;
+    cxlconfig.preferred_storage_level = StorageLevel::CXL;
+
+    LOG(INFO) << "[batch_put_from_into_cxl] Batch writing " << keys.size() 
+              << " objects with preferred storage level=" 
+              << static_cast<int>(cxlconfig.preferred_storage_level);
+
+    auto internal_results = batch_put_from_internal(keys, buffers, sizes, cxlconfig);
+
+    std::vector<int> results;
+    results.reserve(internal_results.size());
+    for (const auto &result : internal_results) {
+        results.push_back(to_py_ret(result));
+    }
+
+    return results;
+}
+
 std::vector<int> DistributedObjectStore::batch_get_into(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes) {
@@ -1231,6 +1256,24 @@ std::vector<int> DistributedObjectStore::batch_get_into(
     std::vector<int> results;
     results.reserve(internal_results.size());
 
+    for (const auto &result : internal_results) {
+        results.push_back(to_py_ret(result));
+    }
+
+    return results;
+}
+
+std::vector<int> DistributedObjectStore::batch_get_into_from_cxl(
+    const std::vector<std::string> &keys,       
+    const std::vector<void *> &buffers,        
+    const std::vector<size_t> &sizes) {        
+
+    auto internal_results = batch_get_into_from_cxl_internal(keys, buffers, sizes);
+    
+    std::vector<int> results;
+
+    results.reserve(internal_results.size());
+    
     for (const auto &result : internal_results) {
         results.push_back(to_py_ret(result));
     }
@@ -1280,12 +1323,12 @@ int DistributedObjectStore::put_from(const std::string &key, void *buffer,
     return to_py_ret(put_from_internal(key, buffer, size, config));
 }
 
-int DistributedObjectStore::put_from_cxl(const std::string &key, void *buffer,
+int DistributedObjectStore::put_from_into_cxl(const std::string &key, void *buffer,
 size_t size) {
     ReplicateConfig cxlconfig;
     cxlconfig.preferred_storage_level = StorageLevel::CXL;
     
-    LOG(INFO) << "[put_from_cxl] key=" << key << ", preferred_storage_level=" << static_cast<int>(cxlconfig.preferred_storage_level);
+    LOG(INFO) << "[put_from_into_cxl] key=" << key << ", preferred_storage_level=" << static_cast<int>(cxlconfig.preferred_storage_level);
     
     return to_py_ret(put_from_internal(key, buffer, size, cxlconfig));
 }
@@ -1427,6 +1470,165 @@ DistributedObjectStore::batch_get_into_internal(
         if (!batch_get_results[j]) {
             const auto error = batch_get_results[j].error();
             LOG(ERROR) << "BatchGet failed for key '" << op.key
+                       << "': " << toString(error);
+            results[op.original_index] = tl::unexpected(error);
+        }
+    }
+
+    return results;
+}
+
+std::vector<tl::expected<int64_t, ErrorCode>>
+DistributedObjectStore::batch_get_into_from_cxl_internal(
+    const std::vector<std::string> &keys, 
+    const std::vector<void *> &buffers,
+    const std::vector<size_t> &sizes) {
+
+    if (!client_) {
+        LOG(ERROR) << "Client is not initialized";
+        return std::vector<tl::expected<int64_t, ErrorCode>>(
+            keys.size(), tl::unexpected(ErrorCode::INVALID_PARAMS));
+    }
+
+    if (keys.size() != buffers.size() || keys.size() != sizes.size()) {
+        LOG(ERROR) << "Input vector sizes mismatch: keys=" << keys.size()
+                   << ", buffers=" << buffers.size()
+                   << ", sizes=" << sizes.size();
+        // Return parameter invalid error for all keys if sizes mismatch
+        return std::vector<tl::expected<int64_t, ErrorCode>>(
+            keys.size(), tl::unexpected(ErrorCode::INVALID_PARAMS));
+    }
+
+    const size_t num_keys = keys.size();
+    std::vector<tl::expected<int64_t, ErrorCode>> results;
+    results.reserve(num_keys);  
+
+    if (num_keys == 0) {
+        return results;
+    }
+
+    const auto query_results = client_->BatchQuery(keys);
+
+    struct ValidKeyInfo {
+        std::string key;                 
+        size_t original_index;            
+        std::vector<Replica::Descriptor> cxl_replica;  
+        std::vector<Slice> slices;        
+        uint64_t total_size;              
+    };
+
+    std::vector<ValidKeyInfo> valid_operations;
+    valid_operations.reserve(num_keys);  
+
+    for (size_t i = 0; i < num_keys; ++i) {
+        const auto &key = keys[i];
+
+        if (!query_results[i]) {
+            const auto error = query_results[i].error();
+            results.emplace_back(tl::unexpected(error));  
+            if (error != ErrorCode::OBJECT_NOT_FOUND) {
+                LOG(ERROR) << "Query failed for key '" << key
+                           << "': " << toString(error);
+            }
+            continue;  
+        }
+
+        auto replica_list = query_results[i].value();  
+        if (replica_list.empty()) {
+            LOG(ERROR) << "Empty replica list for key: " << key;
+            results.emplace_back(tl::unexpected(ErrorCode::INVALID_REPLICA));
+            continue;
+        }
+
+        // Filter CXL storage level replica
+        std::vector<Replica::Descriptor>cxl_replica;
+        for (const auto& replica : replica_list) {
+            if (replica.storage_level == StorageLevel::CXL) { 
+                cxl_replica.push_back(replica); 
+                break;  // Find the first CXL replica
+            } 
+        }
+        
+        if (cxl_replica.empty()) {
+            LOG(ERROR) << "No CXL StorageLevel replica found for key: " << key;
+            results.emplace_back(tl::unexpected(ErrorCode::INVALID_REPLICA));
+            continue;
+        }
+        
+        const auto &replica = cxl_replica[0];  
+        uint64_t total_size = calculate_total_size(replica);  
+        LOG(INFO) << "[batch_get_into_from_cxl] key=" << key
+          << " read object with replica storage_level="
+          << static_cast<int>(replica.storage_level)
+          << " (0=RAM 1=CXL 2=SSD)";
+
+        if (sizes[i] < total_size) {
+            LOG(ERROR) << "Buffer too small for key '" << key
+                       << "': required=" << total_size
+                       << ", available=" << sizes[i];
+            results.emplace_back(tl::unexpected(ErrorCode::INVALID_PARAMS));
+            continue;
+        }
+
+        std::vector<Slice> key_slices;  
+        uint64_t offset = 0;            
+
+        if (replica.is_memory_replica() == false) {        
+            while (offset < total_size) {
+                auto chunk_size = std::min(total_size - offset, kMaxSliceSize);
+                void *chunk_ptr = static_cast<char *>(buffers[i]) + offset;
+                key_slices.emplace_back(Slice{chunk_ptr, chunk_size});
+                offset += chunk_size; 
+            }
+        } else {
+            for (auto &handle : replica.get_memory_descriptor().buffer_descriptors) {
+                void *chunk_ptr = static_cast<char *>(buffers[i]) + offset;
+                key_slices.emplace_back(Slice{chunk_ptr, handle.size_});
+                offset += handle.size_;  
+            }
+        }
+
+        valid_operations.push_back({
+            .key = key,
+            .original_index = i,
+            .cxl_replica = std::move(cxl_replica),  
+            .slices = std::move(key_slices),         
+            .total_size = total_size
+        });
+
+        results.emplace_back(static_cast<int64_t>(total_size));
+    }
+
+    if (valid_operations.empty()) {
+        return results;
+    }
+    LOG(INFO) << "Batch reading statistics:"
+          << " total requested keys =" << keys.size()
+          << ", valid keys =" << valid_operations.size()
+          << ", total CXL replicas =" << valid_operations.size();
+
+    std::vector<std::string> batch_keys;  
+    std::vector<std::vector<Replica::Descriptor>> batch_replica_lists; 
+    std::unordered_map<std::string, std::vector<Slice>> batch_slices;   
+
+    batch_keys.reserve(valid_operations.size());
+    batch_replica_lists.reserve(valid_operations.size());
+
+    for (const auto &op : valid_operations) {
+        batch_keys.push_back(op.key);
+        batch_replica_lists.push_back(op.cxl_replica);
+        batch_slices[op.key] = op.slices;
+    }
+  
+    const auto batch_get_results =
+        client_->BatchGet(batch_keys, batch_replica_lists, batch_slices);
+
+    for (size_t j = 0; j < batch_get_results.size(); ++j) {
+        const auto &op = valid_operations[j];  
+
+        if (!batch_get_results[j]) {
+            const auto error = batch_get_results[j].error();
+            LOG(ERROR) << "BatchGet from CXL segment failed for key '" << op.key
                        << "': " << toString(error);
             results[op.original_index] = tl::unexpected(error);
         }
@@ -1875,13 +2077,13 @@ PYBIND11_MODULE(store, m) {
             py::arg("key"), py::arg("buffer_ptr"), py::arg("size"),
             "Get object data directly into a pre-allocated buffer")
         .def(
-            "get_into_cxl",
+            "get_into_from_cxl",
             [](DistributedObjectStore &self, const std::string &key,
                uintptr_t buffer_ptr, size_t size) {
                 // Get data from CXL segment directly into user-provided buffer
                 void *buffer = reinterpret_cast<void *>(buffer_ptr);
                 py::gil_scoped_release release;
-                return self.get_into_cxl(key, buffer, size);
+                return self.get_into_from_cxl(key, buffer, size);
             },
             py::arg("key"), py::arg("buffer_ptr"), py::arg("size"),
             "Get object data from CXL segment directly into a pre-allocated buffer")
@@ -1904,6 +2106,22 @@ PYBIND11_MODULE(store, m) {
             "multiple "
             "keys")
         .def(
+            "batch_get_into_from_cxl",
+            [](DistributedObjectStore &self,
+               const std::vector<std::string> &keys,
+               const std::vector<uintptr_t> &buffer_ptrs,
+               const std::vector<size_t> &sizes) {
+                std::vector<void *> buffers;
+                buffers.reserve(buffer_ptrs.size());
+                for (uintptr_t ptr : buffer_ptrs) {
+                    buffers.push_back(reinterpret_cast<void *>(ptr));
+                }
+                py::gil_scoped_release release;
+                return self.batch_get_into_from_cxl(keys, buffers, sizes);
+            },
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("sizes"),
+            "Get object data from CXL segment directly into pre-allocated buffers for multiple keys")
+        .def(
             "put_from",
             [](DistributedObjectStore &self, const std::string &key,
                uintptr_t buffer_ptr, size_t size,
@@ -1916,20 +2134,17 @@ PYBIND11_MODULE(store, m) {
             py::arg("key"), py::arg("buffer_ptr"), py::arg("size"),
             py::arg("config") = ReplicateConfig{},
             "Put object data directly from a pre-allocated buffer")
-
         .def(
-            "put_from_cxl",
+            "put_from_into_cxl",
             [](DistributedObjectStore &self, const std::string &key,
                uintptr_t buffer_ptr, size_t size) {
                 
                 void *buffer = reinterpret_cast<void *>(buffer_ptr);
                 py::gil_scoped_release release;
-                return self.put_from_cxl(key, buffer, size);
+                return self.put_from_into_cxl(key, buffer, size);
             },
             py::arg("key"), py::arg("buffer_ptr"), py::arg("size"),
-            "Put object data directly from a pre-allocated buffer to CXL segment")
-
-        
+            "Put object data directly from a pre-allocated buffer into CXL segment")
         .def(
             "put_from_with_metadata",
             [](DistributedObjectStore &self, const std::string &key,
@@ -1970,6 +2185,22 @@ PYBIND11_MODULE(store, m) {
             "Put object data directly from pre-allocated buffers for "
             "multiple "
             "keys")
+        .def(
+            "batch_put_from_into_cxl",
+            [](DistributedObjectStore &self,
+               const std::vector<std::string> &keys,
+               const std::vector<uintptr_t> &buffer_ptrs,
+               const std::vector<size_t> &sizes) {
+                std::vector<void *> buffers;
+                buffers.reserve(buffer_ptrs.size());
+                for (uintptr_t ptr : buffer_ptrs) {
+                    buffers.push_back(reinterpret_cast<void *>(ptr));
+                }
+                py::gil_scoped_release release;
+                return self.batch_put_from_into_cxl(keys, buffers, sizes);
+            },
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("sizes"),
+            "Put object data directly from pre-allocated buffers for multiple keys into CXL segment")
         .def(
             "put",
             [](DistributedObjectStore &self, const std::string &key,
