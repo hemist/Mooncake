@@ -121,7 +121,8 @@ class DistributedObjectStore {
      * register_buffer() for zero-copy operations
      */
     int get_into(const std::string &key, void *buffer, size_t size);
-    int get_into_cxl(const std::string &key, void *buffer, size_t size);
+
+    int get_into_from_cxl(const std::string &key, void *buffer, size_t size);
 
     /**
      * @brief Get object data directly into pre-allocated buffers for multiple
@@ -135,6 +136,10 @@ class DistributedObjectStore {
      * register_buffer() for zero-copy operations
      */
     std::vector<int> batch_get_into(const std::vector<std::string> &keys,
+                                    const std::vector<void *> &buffers,
+                                    const std::vector<size_t> &sizes);
+                                
+    std::vector<int> batch_get_into_from_cxl(const std::vector<std::string> &keys,
                                     const std::vector<void *> &buffers,
                                     const std::vector<size_t> &sizes);
 
@@ -151,9 +156,7 @@ class DistributedObjectStore {
     int put_from(const std::string &key, void *buffer, size_t size,
                  const ReplicateConfig &config = ReplicateConfig{});
 
-    int put_from_cxl(const std::string &key, void *buffer, size_t size);
-    tl::expected<void, ErrorCode> put_from_cxl_internal(
-        const std::string &key, void *buffer, size_t size);
+    int put_from_into_cxl(const std::string &key, void *buffer, size_t size);
 
     /**
      * @brief Put object data directly from pre-allocated buffers for multiple
@@ -192,6 +195,10 @@ class DistributedObjectStore {
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers, const std::vector<size_t> &sizes,
         const ReplicateConfig &config = ReplicateConfig{});
+
+    std::vector<int> batch_put_from_into_cxl(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers, const std::vector<size_t> &sizes);
 
     int put_parts(const std::string &key,
                   std::vector<std::span<const char>> values,
@@ -293,12 +300,17 @@ class DistributedObjectStore {
     tl::expected<int64_t, ErrorCode> get_into_internal(const std::string &key,
                                                        void *buffer,
                                                        size_t size);
-    tl::expected<int64_t, ErrorCode> get_into_cxl_internal(
+
+    tl::expected<int64_t, ErrorCode> get_into_from_cxl_internal(
         const std::string &key, void *buffer, size_t size);
 
     std::vector<tl::expected<int64_t, ErrorCode>> batch_get_into_internal(
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers, const std::vector<size_t> &sizes);
+        
+    std::vector<tl::expected<int64_t, ErrorCode>> batch_get_into_from_cxl_internal(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers, const std::vector<size_t> &sizes);   
 
     tl::expected<void, ErrorCode> put_from_internal(
         const std::string &key, void *buffer, size_t size,
