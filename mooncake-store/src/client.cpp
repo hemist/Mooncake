@@ -489,7 +489,7 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
-    // client_config.preferred_storage_level = StorageLevel::RAM;
+    client_config.preferred_storage_level = StorageLevel::CXL;
 
     // Start put operation
     auto start_result = master_client_.PutStart(key, slice_lengths, client_config);
@@ -926,6 +926,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
+    client_config.preferred_storage_level = StorageLevel::CXL;
 
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);

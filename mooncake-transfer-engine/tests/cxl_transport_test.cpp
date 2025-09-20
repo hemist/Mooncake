@@ -40,7 +40,7 @@ namespace mooncake {
 
 DEFINE_string(local_server_name, getHostname(),
               "Local server name for segment discovery");
-DEFINE_string(metadata_server, "10.129.131.15:2379", "etcd server host address");
+DEFINE_string(metadata_server, "10.130.5.220:2379", "etcd server host address");
 DEFINE_string(mode, "initiator",
               "Running mode: initiator or target. Initiator node read/write "
               "data blocks from target node");
