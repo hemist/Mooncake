@@ -72,12 +72,12 @@ class MasterService {
         ObjectMetadata() = delete;
 
         ObjectMetadata(size_t value_length, std::vector<Replica>&& reps,
-                       bool enable_soft_pin)
+                       bool enable_soft_pin, bool can_be_evicted = true)
             : replicas(std::move(reps)),
               size(value_length),
               lease_timeout(),
               soft_pin_timeout(std::nullopt),
-              migrating(false) {
+              can_be_evicted(can_be_evicted) {
             MasterMetricManager::instance().inc_key_count(1);
             if (enable_soft_pin) {
                 soft_pin_timeout.emplace();
@@ -98,7 +98,7 @@ class MasterService {
         std::chrono::steady_clock::time_point lease_timeout;  // hard lease
         std::optional<std::chrono::steady_clock::time_point>
             soft_pin_timeout;  // optional soft pin, only set for vip objects
-        bool migrating;
+        bool can_be_evicted;
 
         // Check if there are some replicas with a different status than the
         // given value. If there are, return the status of the first replica
@@ -113,6 +113,10 @@ class MasterService {
             return {};
         }
 
+        StorageLevel get_storage_level() const {
+            return replicas.front().get_storage_level();
+        }
+
         // Grant a lease with timeout as now() + ttl, only update if the new
         // timeout is larger
         void GrantLease(const uint64_t ttl, const uint64_t soft_ttl) {
@@ -125,6 +129,14 @@ class MasterService {
                     std::max(*soft_pin_timeout,
                              now + std::chrono::milliseconds(soft_ttl));
             }
+        }
+
+        bool CanBeEvicted() const {
+            return can_be_evicted;
+        }
+
+        void SetEvicted() {
+            this->can_be_evicted = false;
         }
 
         // Check if the lease has expired
@@ -421,9 +433,6 @@ class MasterService {
     const uint64_t default_kv_soft_pin_ttl_;  // in milliseconds
     const bool allow_evict_soft_pinned_objects_;
 
-    // Eviction related members
-    std::atomic<bool> need_eviction_{
-        false};  // Set to trigger eviction when not enough space left
     const double eviction_ratio_;                 // in range [0.0, 1.0]
     const double eviction_high_watermark_ratio_;  // in range [0.0, 1.0]
 

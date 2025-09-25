@@ -36,6 +36,8 @@ class MasterMetricManager {
     void dec_allocated_ssd_size(int64_t val = 1);
     void inc_total_ssd_capacity(int64_t val = 1);
     void dec_total_ssd_capacity(int64_t val = 1);
+    void inc_degraded_queue_size(int64_t val = 1);
+    void dec_degraded_queue_size(int64_t val = 1);
     int64_t get_allocated_size();
     int64_t get_total_capacity();
     int64_t get_total_dram_capacity();
@@ -44,10 +46,13 @@ class MasterMetricManager {
     // Key/Value Metrics
     void inc_key_count(int64_t val = 1);
     void dec_key_count(int64_t val = 1);
+    void inc_degraded_queue_key_count(int64_t val = 1);
+    void dec_degraded_queue_key_count(int64_t val = 1);
     void inc_soft_pin_key_count(int64_t val = 1);
     void dec_soft_pin_key_count(int64_t val = 1);
     void observe_value_size(int64_t size);
     int64_t get_key_count();
+    int64_t get_degraded_queue_key_count();
     int64_t get_soft_pin_key_count();
 
     // Cluster Metrics
@@ -182,9 +187,11 @@ class MasterMetricManager {
     ylt::metric::gauge_t total_cxl_capacity_;
     ylt::metric::gauge_t allocated_ssd_size_;
     ylt::metric::gauge_t total_ssd_capacity_;
+    ylt::metric::gauge_t degraded_queue_size_;
 
     // Key/Value Metrics
     ylt::metric::gauge_t key_count_;
+    ylt::metric::gauge_t degraded_queue_key_count_;
     ylt::metric::gauge_t soft_pin_key_count_;
     ylt::metric::histogram_t value_size_distribution_;
 

@@ -153,13 +153,16 @@ class LevelAllocationStrategy : public AllocationStrategy {
         if (allocators.size() <= 0) {
             return nullptr;
         }
-        LOG(INFO) << "In Allocate, config: " << config;
+        // LOG(INFO) << "In Allocate, config: " << config;
 
         if (config.preferred_storage_level == StorageLevel::RAM) {
             return TryPreferredAllocate(allocators_by_name, objectSize, config);
         } else if (config.preferred_storage_level == StorageLevel::CXL) {
             return CxlOffsetAllocate(allocators[0], objectSize, config);
-        } else return nullptr;
+        } else {
+            LOG(ERROR) << "Invalid preferred_storage_level: " << config.preferred_storage_level;
+            return nullptr;
+        }
     }
 
    private:
@@ -170,8 +173,6 @@ class LevelAllocationStrategy : public AllocationStrategy {
         if (!cxl_global_allocator || size == 0) {
             return nullptr;
         }
-
-        VLOG(1) << "Do cxl allocate, overwriten segment=" << config.preferred_segment;
 
         auto allocated_buffer = cxl_global_allocator->allocate(size);
         if (allocated_buffer) {
@@ -206,7 +207,6 @@ class LevelAllocationStrategy : public AllocationStrategy {
             LOG(ERROR) << "No non-CXL allocator in preferred_segment";
             return nullptr;
         }
-        VLOG(1) << "allocator's segment_name_ = " << allocator->getSegmentName();
         
         return allocator->allocate(objectSize);
     }

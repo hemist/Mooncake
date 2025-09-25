@@ -17,6 +17,7 @@ int MasterMQService::push(const UUID& client_id, DegradeMsg &msg) {
     std::unique_lock lock(mu_);
     // LOG(ERROR) << "MasterMQService::push instance: " << this << " >>, degraed_mq_.size: " << degraed_mq_.size();
     degraed_mq_[client_id].push(msg);
+    MasterMetricManager::instance().inc_degraded_queue_key_count();
     // LOG(ERROR) << "MasterMQService::push instance: " << this << " <<, degraed_mq_.size: " << degraed_mq_.size();
     return 0;
 }
@@ -31,6 +32,7 @@ int MasterMQService::pop(const UUID& client_id, DegradeMsg &msg) {
     }
     msg = std::move(it->second.front());
     it->second.pop();
+    MasterMetricManager::instance().dec_degraded_queue_key_count();
     return 0;
 }
 

@@ -489,7 +489,7 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
-    client_config.preferred_storage_level = StorageLevel::CXL;
+    // client_config.preferred_storage_level = StorageLevel::CXL;
 
     // Start put operation
     auto start_result = master_client_.PutStart(key, slice_lengths, client_config);
@@ -926,7 +926,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
-    client_config.preferred_storage_level = StorageLevel::CXL;
+    // client_config.preferred_storage_level = StorageLevel::CXL;
 
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);
@@ -1390,7 +1390,7 @@ ErrorCode Client::FindFirstCompleteReplica(
 }
 
 void Client::DegradeThreadFunc() {
-    const int kDegradeThreadSleepMs = 1000; // 1 second
+    const int kDegradeThreadSleepMs = 10; // 1 second
     LOG(WARNING) << "DegradeThreadFunc Runing, client_id:" << client_id_;
     while (degrade_running_) {
         // Try to pop a degrade message from master
@@ -1400,13 +1400,21 @@ void Client::DegradeThreadFunc() {
             // LOG(WARNING) << "Processing degrade task for key: " << msg.key_;
             
             // Perform migration
-            auto migrate_result = Migrate(msg);
-            if (!migrate_result) {
-                LOG(ERROR) << "Failed to migrate object with key: " << msg.key_
-                           << ", error: " << toString(migrate_result.error());
-            } else {
-                // LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
+            int retry_count = 0;
+            while (retry_count < 3) { 
+                auto migrate_result = Migrate(msg);
+                if (!migrate_result) {
+                    retry_count++;
+                    LOG(ERROR) << "Failed to migrate object with key: " << msg.key_
+                            << ", error: " << toString(migrate_result.error());
+                    // master_client_.PushMasterMQ(client_id_, msg);
+                } else {
+                    // LOG(WARNING) << "Successfully migrated object with key: " << msg.key_;
+                    break;
+                }
             }
+            
+            
         } else {
             // No degrade task available, sleep for a while
             std::this_thread::sleep_for(

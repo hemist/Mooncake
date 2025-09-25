@@ -325,6 +325,8 @@ class AllocatedBuffer {
 
     void mark_complete() { status = BufStatus::COMPLETE; }
 
+    [[nodiscard]] StorageLevel get_level() const { return level; }
+
     void change_to_cxl(std::string client_segment_name) {
         u_int64_t offset_raw = reinterpret_cast<uintptr_t>(buffer_ptr_);
         buffer_ptr_ = reinterpret_cast<void*>(offset_raw - DEFAULT_CXL_BASE);
@@ -394,6 +396,10 @@ class Replica {
         buffers_.clear();
         storage_level_ = StorageLevel::RAM;
         status_ = ReplicaStatus::UNDEFINED;
+    }
+
+    [[nodiscard]] StorageLevel get_storage_level() const {
+        return storage_level_;
     }
 
     [[nodiscard]] Descriptor get_descriptor() const;

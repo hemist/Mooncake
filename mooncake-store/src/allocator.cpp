@@ -67,7 +67,7 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
         size_t padding_size = std::max(size, kMinSliceSize);
         buffer = memory_allocator_->allocate(pool_id_, padding_size);
         if (!buffer) {
-            // LOG(WARNING) << "allocation_failed size=" << size << " segment=" << segment_name_ << " current_size=" << cur_size_;
+            LOG(ERROR) << "allocation_failed size=" << size << " segment=" << segment_name_ << " current_size=" << cur_size_;
             return nullptr;
         }
     } catch (const std::exception& e) {
@@ -88,9 +88,9 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
 
 void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
     try {
-        void* buffer = handle->get_descriptor().level_ == StorageLevel::CXL ?
-                        handle->get_vaddr_from_cxl() :
-                        handle->buffer_ptr_;
+        bool is_cxl = handle->get_descriptor().level_ == StorageLevel::CXL;
+        void* buffer = is_cxl ? handle->get_vaddr_from_cxl() : handle->buffer_ptr_;
+
         // Deallocate memory using CacheLib.
         memory_allocator_->free(buffer);
         handle->status = BufStatus::UNREGISTERED;
@@ -98,7 +98,11 @@ void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
             handle->size_;  // Store size before handle might become invalid
         cur_size_.fetch_sub(freed_size);
         MasterMetricManager::instance().dec_allocated_size(freed_size);
-        MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
+        if (is_cxl) {
+            MasterMetricManager::instance().dec_allocated_cxl_size(freed_size);
+        } else {
+            MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
+        }
         VLOG(1) << "deallocation_succeeded address=" << handle->buffer_ptr_
                 << " size=" << freed_size << " segment=" << segment_name_;
     } catch (const std::exception& e) {

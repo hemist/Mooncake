@@ -32,8 +32,12 @@ MasterMetricManager::MasterMetricManager()
                            "Total bytes currently allocated across all ssd segments"),
       total_ssd_capacity_("master_total_ssd_capacity_bytes",
                            "Total ssd capacity across all mounted segments"),
+      degraded_queue_size_("master_degraged_queue_size",
+                           "Total number of degraded requests"),
       key_count_("master_key_count",
                  "Total number of keys managed by the master"),
+      degraded_queue_key_count_("master_degraded_queue_key_count",
+                          "Total number of degraded keys managed by the master"),
       soft_pin_key_count_("master_soft_pin_key_count",
                           "Total number of soft-pinned keys managed by the master"),
       // Initialize Histogram (4KB, 64KB, 256KB, 1MB, 4MB, 16MB, 64MB)
@@ -208,6 +212,14 @@ void MasterMetricManager::dec_total_ssd_capacity(int64_t val) {
     total_ssd_capacity_.dec(val);
 }
 
+void MasterMetricManager::inc_degraded_queue_size(int64_t val) {
+    degraded_queue_size_.inc(val);
+}
+
+void MasterMetricManager::dec_degraded_queue_size(int64_t val) {
+    degraded_queue_size_.dec(val);
+}
+
 int64_t MasterMetricManager::get_allocated_size() {
     return allocated_size_.value();
 }
@@ -225,20 +237,26 @@ std::vector<double> MasterMetricManager::get_global_used_ratio(void) {
     double ram_capacity = total_dram_capacity_.value();
     double cxl_allocated = allocated_cxl_size_.value();
     double cxl_capacity = total_cxl_capacity_.value();
+    double degraded_queue_size = degraded_queue_size_.value();
 
 
     if (ram_capacity == 0.0) {
-        return {0.0, 0.0, 0.0};
+        return {0.0, 0.0, degraded_queue_size};
     }
 
     double ram_ratio = ram_allocated / ram_capacity;
     double cxl_ratio = cxl_capacity == 0.0 ? 0.0 : cxl_allocated / cxl_capacity;
-    return {ram_ratio, cxl_ratio, 0.0};
+    double remain_ram_used_ratio = (ram_allocated - degraded_queue_size) / ram_capacity;
+    return {ram_ratio, cxl_ratio, remain_ram_used_ratio};
 }
 
 // Key/Value Metrics
 void MasterMetricManager::inc_key_count(int64_t val) { key_count_.inc(val); }
 void MasterMetricManager::dec_key_count(int64_t val) { key_count_.dec(val); }
+
+void MasterMetricManager::inc_degraded_queue_key_count(int64_t val) { degraded_queue_key_count_.inc(val); }
+    
+void MasterMetricManager::dec_degraded_queue_key_count(int64_t val) { degraded_queue_key_count_.dec(val); }
 
 void MasterMetricManager::inc_soft_pin_key_count(int64_t val) { soft_pin_key_count_.inc(val); }
 void MasterMetricManager::dec_soft_pin_key_count(int64_t val) { soft_pin_key_count_.dec(val); }
@@ -249,6 +267,10 @@ void MasterMetricManager::observe_value_size(int64_t size) {
 
 int64_t MasterMetricManager::get_key_count() {
     return key_count_.value();
+}
+
+int64_t MasterMetricManager::get_degraded_queue_key_count() {
+    return degraded_queue_key_count_.value();
 }
 
 int64_t MasterMetricManager::get_soft_pin_key_count() {
@@ -591,6 +613,7 @@ std::string MasterMetricManager::serialize_metrics() {
     serialize_metric(allocated_size_);
     serialize_metric(total_capacity_);
     serialize_metric(key_count_);
+    serialize_metric(degraded_queue_key_count_);
     serialize_metric(soft_pin_key_count_);
     if (enable_ha_) {
         serialize_metric(active_clients_);
@@ -681,7 +704,9 @@ std::string MasterMetricManager::get_summary_string() {
     int64_t cxl_capacity = total_cxl_capacity_.value();
     int64_t ssd_allocated = allocated_ssd_size_.value();
     int64_t ssd_capacity = total_ssd_capacity_.value();
+    int64_t degraded_queue_size = degraded_queue_size_.value();
     int64_t keys = key_count_.value();
+    int64_t degraded_queue_keys = degraded_queue_key_count_.value();
     int64_t soft_pin_keys = soft_pin_key_count_.value();
     int64_t active_clients = active_clients_.value();
 
@@ -744,9 +769,12 @@ std::string MasterMetricManager::get_summary_string() {
     if (enable_ha_) {
         ss << "Ping=" << ping - ping_fails << "/" << ping << ", ";
     }
-    ss << "Migrate="
-       << migrate_starts - migrate_start_fails + migrate_ends - migrate_end_fails
-       << "/" << migrate_starts + migrate_ends;
+    ss << "Migrate: start="
+       << migrate_starts - migrate_start_fails << "/" << migrate_starts
+       << ", end=" << migrate_ends - migrate_end_fails << "/" << migrate_ends;
+
+    ss << " | Degraded Queue: " << format_bytes(degraded_queue_size)
+       << ", Keys=" << degraded_queue_keys;
 
     // Eviction summary
     ss << " | Eviction: "

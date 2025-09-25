@@ -366,9 +366,9 @@ auto MasterService::PutStart(const std::string& key,
         total_length += slice_lengths[i];
     }
 
-    LOG(INFO) << "key=" << key << ", value_length=" << total_length
-            << ", slice_count=" << slice_lengths.size() << ", config=" << config
-            << ", action=put_start_begin";
+    // LOG(INFO) << "key=" << key << ", value_length=" << total_length
+    //         << ", slice_count=" << slice_lengths.size() << ", config=" << config
+    //         << ", action=put_start_begin";
 
     // Lock the shard and check if object already exists
     size_t shard_idx = getShardIndex(key);
@@ -391,7 +391,7 @@ auto MasterService::PutStart(const std::string& key,
     }
 
 
-    LOG(INFO) << "key=" << key << ", config=" << config << ", action=allocate_replica_begin";
+    // LOG(INFO) << "key=" << key << ", config=" << config << ", action=allocate_replica_begin";
 
     // Allocate replicas
     std::vector<Replica> replicas;
@@ -402,6 +402,7 @@ auto MasterService::PutStart(const std::string& key,
         for (size_t i = 0; i < client_config.replica_num; ++i) {
             std::vector<std::unique_ptr<AllocatedBuffer>> handles;
             handles.reserve(slice_lengths.size());
+            bool allocated = true;
 
             // Allocate space for each slice
             for (size_t j = 0; j < slice_lengths.size(); ++j) {
@@ -412,17 +413,27 @@ auto MasterService::PutStart(const std::string& key,
                     allocators, allocators_by_name, chunk_size, client_config);
 
                 if (!handle) {
-                    LOG(ERROR) << "key=" << key << ", replica_id=" << i << ", slice_index=" << j << ", error=allocation_failed";
                     // If the allocation failed, we need to evict some objects
                     // to free up space for future allocations.
-                    need_eviction_ = true;
+                    allocated = false;
+                    if (client_config.preferred_storage_level <= StorageLevel::CXL) {
+                        LOG(INFO) << "Allocate failed on current storage level, step down to next storage level";
+                        break;
+                    }
                     return tl::make_unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
                 }
 
-                VLOG(1) << "key=" << key << ", replica_id=" << i
+                LOG(INFO) << "key=" << key << ", replica_id=" << i
                         << ", slice_index=" << j << ", handle=" << *handle
                         << ", action=slice_allocated";
                 handles.emplace_back(std::move(handle));
+            }
+
+            if (!allocated) {
+                -- i;
+                int current_level = static_cast<int>(client_config.preferred_storage_level);
+                client_config.preferred_storage_level = static_cast<StorageLevel>(current_level + 1);
+                continue;
             }
 
             replicas.emplace_back(std::move(handles),
@@ -440,9 +451,10 @@ auto MasterService::PutStart(const std::string& key,
     // No need to set lease here. The object will not be evicted until
     // PutEnd is called.
     metadata_shards_[shard_idx].metadata.emplace(
-        std::piecewise_construct, std::forward_as_tuple(key),
-        std::forward_as_tuple(total_length, std::move(replicas),
-                              client_config.with_soft_pin));
+        std::piecewise_construct, 
+        std::forward_as_tuple(key),
+        std::forward_as_tuple(total_length, std::move(replicas), client_config.with_soft_pin, client_config.preferred_storage_level == StorageLevel::RAM)        
+    );
     return replica_list;
 }
 
@@ -694,10 +706,10 @@ auto MasterService::MigrateStart(const std::string& key,
                 if (!handle) {
                     LOG(ERROR)
                         << "key=" << key << ", replica_id=" << i
-                        << ", slice_index=" << j << ", error=allocation_failed";
+                        << ", slice_index=" << j << ", error=allocation_failed, level=" << config.preferred_storage_level;
                     // If the allocation failed, we need to evict some objects
                     // to free up space for future allocations.
-                    need_eviction_ = true;
+
                     return tl::make_unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
                 }
 
@@ -755,6 +767,7 @@ auto MasterService::MigrateEnd(const std::string& key,
     }
 
     bool target_replica_found = false;
+    uint64_t total_ram_size = 0;
     auto& metadata = accessor.Get();
     for (auto& replica : metadata.replicas) {
         if (replica.get_descriptor().storage_level == config.preferred_storage_level) {
@@ -766,10 +779,13 @@ auto MasterService::MigrateEnd(const std::string& key,
             }
         } else {
             if (replica.get_descriptor().storage_level == StorageLevel::RAM) {
+                total_ram_size += replica.get_size();
                 MasterMetricManager::instance().dec_allocated_dram_size(replica.get_size());
             }
         }
     }
+
+    MasterMetricManager::instance().dec_degraded_queue_size(total_ram_size);
 
     // remove old replicas
     if (target_replica_found) {
@@ -794,10 +810,6 @@ auto MasterService::MigrateEnd(const std::string& key,
 }
 
 void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMetadata>::iterator& it) {
-    if (it->second.migrating)
-    {
-        return;
-    }
     // replicas可能包含多副本，选择其中第一个副本，提交给该副本所在的client
     // LOG(WARNING) << "START PUSHING MASTER MQ: " << it->first;
     auto& replica = it->second.replicas[0];
@@ -817,7 +829,6 @@ void MasterService::PushMasterMQ(const std::unordered_map<std::string, ObjectMet
     }
 
     master_mq_service_->push(client_id, msg);
-    it->second.migrating = true;
 }
 
 void MasterService::GCThreadFunc() {
@@ -853,17 +864,15 @@ void MasterService::GCThreadFunc() {
         }
         std::vector<double> used_ratios =
             MasterMetricManager::instance().get_global_used_ratio();
-        if (used_ratios[0] > eviction_high_watermark_ratio_ ||
-            (need_eviction_ && eviction_ratio_ > 0.0)) {
+        if (used_ratios[2] > eviction_high_watermark_ratio_) {
             double evict_ratio_target = std::max(
                 eviction_ratio_,
-                used_ratios[0] - eviction_high_watermark_ratio_ + eviction_ratio_);
+                used_ratios[2] - eviction_high_watermark_ratio_ + eviction_ratio_);
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
-                         used_ratios[0] - eviction_high_watermark_ratio_);
-            LOG(WARNING) << "Ratio: " << used_ratios[0] << ". Start eviction, " << need_eviction_;
+                         used_ratios[2] - eviction_high_watermark_ratio_);
+            LOG(WARNING) << "Ratio: " << used_ratios[0] << ", Actual ratio: " << used_ratios[2] << ". Start eviction ";
             BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
-            need_eviction_ = false;
         }
 
         std::this_thread::sleep_for(
@@ -902,8 +911,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
     // First pass: evict objects without soft pin and lease expired
     for (size_t i = 0; i < metadata_shards_.size(); i++) {
-        auto& shard =
-            metadata_shards_[(start_idx + i) % metadata_shards_.size()];
+        auto& shard = metadata_shards_[(start_idx + i) % metadata_shards_.size()];
         MutexLocker lock(&shard.mutex);
 
         // object_count must be updated at beginning as it will be used later
@@ -912,18 +920,19 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         // To achieve evicted_count / object_count = evict_ratio_target,
         // ideally how many object should be evicted in this shard
-        const long ideal_evict_num =
-            std::ceil(object_count * evict_ratio_target) - evicted_count;
+        const long ideal_evict_num = std::ceil(object_count * evict_ratio_target) - evicted_count;
 
-        std::vector<std::chrono::steady_clock::time_point>
-            candidates;  // can be removed
-        for (auto it = shard.metadata.begin(); it != shard.metadata.end();
-             it++) {
+        std::vector<std::chrono::steady_clock::time_point> candidates;  // can be removed
+        for (auto it = shard.metadata.begin(); it != shard.metadata.end(); it++) {
+            if (!it->second.CanBeEvicted()) {
+                continue;
+            }
             // Skip objects that are not expired or have incomplete replicas
             if (!it->second.IsLeaseExpired(now) ||
                 it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                 continue;
             }
+
             if (!it->second.IsSoftPinned(now)) {
                 if (ideal_evict_num > 0) {
                     // first pass candidates
@@ -942,18 +951,18 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         if (ideal_evict_num > 0 && !candidates.empty()) {
             long evict_num = std::min(ideal_evict_num, (long)candidates.size());
-            long shard_evicted_count =
-                0;  // number of objects evicted from this shard
+            long shard_evicted_count = 0;  // number of objects evicted from this shard
             std::nth_element(candidates.begin(),
                              candidates.begin() + (evict_num - 1),
                              candidates.end());
             auto target_timeout = candidates[evict_num - 1];
+
             // Evict objects with lease timeout less than or equal to target.
             auto it = shard.metadata.begin();
             while (it != shard.metadata.end()) {
-                // Skip objects that are not allowed to be evicted in the first
-                // pass
-                if (!it->second.IsLeaseExpired(now) ||
+                // Skip objects that are not allowed to be evicted in the first pass
+                if (!it->second.CanBeEvicted() ||
+                    !it->second.IsLeaseExpired(now) ||
                     it->second.IsSoftPinned(now) ||
                     it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                     ++it;
@@ -961,10 +970,10 @@ void MasterService::BatchEvict(double evict_ratio_target,
                 }
                 if (it->second.lease_timeout <= target_timeout) {
                     // Evict this object
-                    total_freed_size +=
-                        it->second.size * it->second.replicas.size();
+                    total_freed_size += it->second.size * it->second.replicas.size();
                     // it = shard.metadata.erase(it);
                     PushMasterMQ(it);
+                    it->second.SetEvicted();
                     ++it;
                     shard_evicted_count++;
                 } else {
@@ -1004,22 +1013,25 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
             // Evict objects with lease timeout less than or equal to target.
             // Stop when the target is reached.
-            for (size_t i = 0;
-                 i < metadata_shards_.size() && target_evict_num > 0; i++) {
-                auto& shard =
-                    metadata_shards_[(start_idx + i) % metadata_shards_.size()];
+            for (size_t i = 0; i < metadata_shards_.size() && target_evict_num > 0; i++) {
+                auto& shard = metadata_shards_[(start_idx + i) % metadata_shards_.size()];
                 MutexLocker lock(&shard.mutex);
+
                 auto it = shard.metadata.begin();
                 while (it != shard.metadata.end() && target_evict_num > 0) {
+                    if (!it->second.CanBeEvicted()) {
+                        ++it;
+                        continue;
+                    }
                     if (it->second.lease_timeout <= target_timeout &&
                         !it->second.IsSoftPinned(now) &&
                         !it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         // Evict this object
-                        total_freed_size +=
-                            it->second.size * it->second.replicas.size();
+                        total_freed_size += it->second.size * it->second.replicas.size();
                         // it = shard.metadata.erase(it);
                         LOG(ERROR) << "PushMasterMQ(it) 2";
                         PushMasterMQ(it);
+                        it->second.SetEvicted();
                         ++it;
                         evicted_count++;
                         target_evict_num--;
@@ -1054,7 +1066,8 @@ void MasterService::BatchEvict(double evict_ratio_target,
                 while (it != shard.metadata.end() && target_evict_num > 0) {
                     // Skip objects that are not expired or have incomplete
                     // replicas
-                    if (!it->second.IsLeaseExpired(now) ||
+                    if (!it->second.CanBeEvicted() ||
+                        !it->second.IsLeaseExpired(now) ||
                         it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         ++it;
                         continue;
@@ -1068,6 +1081,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         // it = shard.metadata.erase(it);
                         LOG(ERROR) << "PushMasterMQ(it) 3";
                         PushMasterMQ(it);
+                        it->second.SetEvicted();
                         ++it;
                         evicted_count++;
                         target_evict_num--;
@@ -1090,17 +1104,17 @@ void MasterService::BatchEvict(double evict_ratio_target,
         }
     }
 
-    //need_eviction_ = false;
+    MasterMetricManager::instance().inc_degraded_queue_size(total_freed_size);
 
-    if (evicted_count > 0) {
-        MasterMetricManager::instance().inc_eviction_success(evicted_count,
-                                                             total_freed_size);
-    } else {
-        if (object_count == 0) {
-            // No objects to evict, no need to check again
-        }
-        MasterMetricManager::instance().inc_eviction_fail();
-    }
+    // if (evicted_count > 0) {
+    //     MasterMetricManager::instance().inc_eviction_success(evicted_count,
+    //                                                          total_freed_size);
+    // } else {
+    //     if (object_count == 0) {
+    //         // No objects to evict, no need to check again
+    //     }
+    //     MasterMetricManager::instance().inc_eviction_fail();
+    // }
     VLOG(1) << "action=evict_objects"
             << ", evicted_count=" << evicted_count
             << ", total_freed_size=" << total_freed_size;
