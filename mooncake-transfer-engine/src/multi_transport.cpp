@@ -117,13 +117,16 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
     auto &batch_desc = *((BatchDesc *)(batch_id));
     const size_t task_count = batch_desc.task_list.size();
     if (task_id >= task_count) {
-        return Status::InvalidArgument("Task ID out of range");
+        return Status::NoStatus();
     }
     auto &task = batch_desc.task_list[task_id];
     status.transferred_bytes = task.transferred_bytes;
     uint64_t success_slice_count = task.success_slice_count;
     uint64_t failed_slice_count = task.failed_slice_count;
-    assert(task.slice_count);
+    
+    if (task.slice_count == 0) {
+        return Status::NoStatus();
+    }
     if (success_slice_count + failed_slice_count == task.slice_count) {
         if (failed_slice_count) {
             status.s = Transport::TransferStatusEnum::FAILED;

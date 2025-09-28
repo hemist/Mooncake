@@ -184,20 +184,12 @@ class FilereadOperationState : public OperationState {
 class TransferEngineOperationState : public OperationState {
    public:
     TransferEngineOperationState(TransferEngine& engine)
-        :engine_(engine), 
+        :engine_(engine),
          batch_id_(Transport::INVALID_BATCH_ID),
          batch_size_(0) {
     }
 
     ~TransferEngineOperationState() {
-        if (batch_id_ != Transport::INVALID_BATCH_ID) {
-            // LOG(INFO) << "Freeing batch ID " << batch_id_;
-            Status s = engine_.freeBatchID(batch_id_);
-            // if (s != Status::OK()) {
-            //     LOG(ERROR) << s.ToString();
-            // }
-
-        }
     }
 
     bool is_completed() override;
@@ -211,6 +203,10 @@ class TransferEngineOperationState : public OperationState {
     void setBatch(BatchID batch_id, size_t batch_size) {
         batch_id_ = batch_id;
         batch_size_ = batch_size;
+    }
+
+    BatchID getBatchID() const {
+        return batch_id_;
     }
 
     void set_completed(ErrorCode error_code) {
@@ -272,6 +268,8 @@ class TransferFuture {
      * @return TransferStrategy enum value
      */
     TransferStrategy strategy() const;
+
+    BatchID getBatchID();
 
    private:
     std::shared_ptr<OperationState> state_;
@@ -464,6 +462,8 @@ class TransferSubmitter {
     std::optional<TransferFuture> submit(
         const Replica::Descriptor& replica,
         std::vector<Slice>& slices, Transport::TransferRequest::OpCode op_code);
+
+    void receive(TransferFuture& future);
 
    private:
     TransferEngine& engine_;

@@ -39,6 +39,7 @@ class Status final {
     kDeviceNotFound = 6,
     kAddressOverlapped = 7,
     kNotSupportedTransport = 8,
+    kNoStatus = 19,
     kDns = 101,
     kSocket = 102,
     kMalformedJson = 103,
@@ -181,6 +182,8 @@ class Status final {
 
   // Return a status of an appropriate type.
   static Status OK() { return Status(); }
+
+  static Status NoStatus() { return Status(Code::kNoStatus, "No Status"); }
   static Status InvalidArgument(std::string_view msg) {
     return Status(Code::kInvalidArgument, msg);
   }

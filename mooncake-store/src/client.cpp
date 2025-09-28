@@ -468,6 +468,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         } else {
             VLOG(1) << "Transfer completed successfully for key: " << key;
             results[index] = {};
+            transfer_submitter_->receive(future);
         }
     }
 
@@ -730,6 +731,8 @@ void Client::WaitForTransfers(std::vector<PutOperation>& ops) {
                     all_transfers_succeeded = false;
                 }
                 // Continue waiting for all transfers to avoid resource leaks
+            } else {
+                transfer_submitter_->receive(op.pending_transfers[i]);
             }
         }
 
@@ -1245,7 +1248,11 @@ ErrorCode Client::TransferData(const Replica::Descriptor& replica_descriptor,
 
     VLOG(1) << "Using transfer strategy: " << future->strategy();
 
-    return future->get();
+    ErrorCode result = future->get();
+    if (result == ErrorCode::OK) {
+        transfer_submitter_->receive(future.value());
+    }
+    return result;
 }
 
 ErrorCode Client::TransferWrite(const Replica::Descriptor& replica_descriptor,

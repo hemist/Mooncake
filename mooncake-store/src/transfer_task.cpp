@@ -13,7 +13,7 @@ namespace mooncake {
 // EngineWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
-constexpr int kDefaultEngineWorkers = 10;
+constexpr int kDefaultEngineWorkers = 1;
 
 EngineWorkerPool::EngineWorkerPool(TransferEngine& engine) 
     :shutdown_(false), engine_(engine) {
@@ -112,19 +112,8 @@ void EngineWorkerPool::workerThread() {
                     requests.emplace_back(request);
                 }
 
-                // Allocate batch ID
-                BatchID batch_id;
-                if (transfer_success) {
-                    const size_t batch_size = requests.size();
-                    batch_id = engine_.allocateBatchID(batch_size);
-                    if (batch_id == Transport::INVALID_BATCH_ID) {
-                        LOG(ERROR) << "Failed to allocate batch ID";
-                        // task.state->set_completed(ErrorCode::TRANSFER_FAIL);
-                        transfer_success = false;
-                    } else {
-                        task.state->setBatch(batch_id, batch_size);
-                    }
-                }
+                // Get batch ID
+                BatchID batch_id = task.state->getBatchID();
 
                 // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
                 if (transfer_success) { 
@@ -141,17 +130,15 @@ void EngineWorkerPool::workerThread() {
                     } else {
                         VLOG(2) << "Transfer Engine task completed successfully with " 
                                 << task.handles.size() << " handles" ;
-                        // engine_.freeBatchID(batch_id);
                     }
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR) << "Exception during async fileread: " << e.what();
-                // task.state->set_completed(ErrorCode::TRANSFER_FAIL);
             }
-        }
+        } 
     }
 
-    VLOG(2) << "FilereadWorkerPool worker thread exiting";
+    VLOG(2) << "EngineWorkerPool worker thread exiting";
 }
 
 // ============================================================================
@@ -371,13 +358,8 @@ void TransferEngineOperationState::check_task_status() {
     for (size_t i = 0; i < batch_size_; ++i) {
         TransferStatus status;
         Status s = engine_.getTransferStatus(batch_id_, i, status);
-        if (!s.ok()) {
-            LOG(ERROR) << "Failed to get transfer status for batch "
-                       << batch_id_ << " task " << i << " with error "
-                       << s.message();
-            set_result_internal(ErrorCode::TRANSFER_FAIL);
+        if (!s.ok()) 
             return;
-        }
 
         switch (status.s) {
             case TransferStatusEnum::COMPLETED:
@@ -462,6 +444,7 @@ void TransferEngineOperationState::wait_for_completion() {
         VLOG(1) << "Transfer engine operation still pending for batch "
                 << batch_id_;
     }
+    // engine_.freeBatchID(batch_id_);
 }
 
 // ============================================================================
@@ -486,6 +469,13 @@ ErrorCode TransferFuture::get() { return wait(); }
 
 TransferStrategy TransferFuture::strategy() const {
     return state_->get_strategy();
+}
+
+BatchID TransferFuture::getBatchID() { 
+    if (state_->get_strategy() == TransferStrategy::TRANSFER_ENGINE) {
+        return static_cast<TransferEngineOperationState*>(state_.get())->getBatchID();
+    }
+    return Transport::INVALID_BATCH_ID;
 }
 
 // ============================================================================
@@ -557,10 +547,20 @@ std::optional<TransferFuture> TransferSubmitter::submit(
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
                 return std::nullopt;
         }
-    }else{
+    } else {
         // LOG(INFO) << "FILE transfer";
         return submitFileReadOperation(replica, slices, op_code);
     }
+}
+
+void TransferSubmitter::receive(TransferFuture& future) {
+    BatchID batch_id = future.getBatchID();
+    if (batch_id == Transport::INVALID_BATCH_ID) {
+        LOG(INFO) << "Invalid batch id received";
+        return;
+    }
+
+    engine_.freeBatchID(batch_id);
 }
 
 std::optional<TransferFuture> TransferSubmitter::submitMemcpyOperation(
@@ -611,7 +611,12 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     std::string &proto) {
 
     auto state = std::make_shared<TransferEngineOperationState>(engine_);
-    // LOG(INFO) << "state: " << state; 
+    BatchID batch_id = engine_.allocateBatchID(handles.size());
+    if (batch_id == Transport::INVALID_BATCH_ID) {
+        LOG(ERROR) << "Failed to allocate batch ID for transfer";
+        return std::nullopt;
+    }
+    state->setBatch(batch_id, handles.size());
 
     // Submit transfer operations to worker pool for async execution
     EngineTask task(handles, slices, op_code, proto, state);

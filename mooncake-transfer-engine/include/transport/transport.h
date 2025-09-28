@@ -149,10 +149,9 @@ class Transport {
                 delete slice;
                 freed_++;
             }
-            if (allocated_ != freed_) {
-                LOG(WARNING) << "detected slice leak: allocated " << allocated_
-                             << " freed " << freed_;
-            }
+            // if (allocated_ != freed_) {
+            //     LOG(WARNING) << "detected slice leak: allocated " << allocated_ << " freed " << freed_;
+            // }
         }
 
         Slice *allocate() {
@@ -195,6 +194,7 @@ class Transport {
         volatile bool is_finished = false;
         uint64_t total_bytes = 0;
         BatchID batch_id = 0;
+        TransferStatusEnum status;
 
         // record the origin request
         const TransferRequest *request = nullptr;
