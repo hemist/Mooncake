@@ -1566,10 +1566,10 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
         
         const auto &replica = cxl_replica[0];  
         uint64_t total_size = calculate_total_size(replica);  
-        LOG(INFO) << "[batch_get_into_from_cxl] key=" << key
-          << " read object with replica storage_level="
-          << static_cast<int>(replica.storage_level)
-          << " (0=RAM 1=CXL 2=SSD)";
+        // LOG(INFO) << "[batch_get_into_from_cxl] key=" << key
+        //   << " read object with replica storage_level="
+        //   << static_cast<int>(replica.storage_level)
+        //   << " (0=RAM 1=CXL 2=SSD)";
 
         if (sizes[i] < total_size) {
             LOG(ERROR) << "Buffer too small for key '" << key

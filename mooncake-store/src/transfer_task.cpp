@@ -13,7 +13,7 @@ namespace mooncake {
 // EngineWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
-constexpr int kDefaultEngineWorkers = 1;
+constexpr int kDefaultEngineWorkers = 10;
 
 EngineWorkerPool::EngineWorkerPool(TransferEngine& engine) 
     :shutdown_(false), engine_(engine) {
@@ -248,7 +248,7 @@ void FilereadWorkerPool::workerThread() {
 // MemcpyWorkerPool Implementation
 // ============================================================================
 // Since memcpy is bound by memory bandwidth, we only need one worker thread.
-constexpr int kDefaultMemcpyWorkers = 1;
+constexpr int kDefaultMemcpyWorkers = 10;
 
 MemcpyWorkerPool::MemcpyWorkerPool() : shutdown_(false) {
     VLOG(1) << "Creating MemcpyWorkerPool with " << kDefaultMemcpyWorkers
@@ -536,7 +536,7 @@ std::optional<TransferFuture> TransferSubmitter::submit(
         TransferStrategy strategy = selectStrategy(handles, slices);
         std::string proto = level_protocols_[replica.get_storage_level()];
 
-        LOG(INFO) << "strategy = " << strategy << ", proto = " << proto;
+        // LOG(INFO) << "strategy = " << strategy << ", proto = " << proto;
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:

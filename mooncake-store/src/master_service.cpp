@@ -315,7 +315,7 @@ auto MasterService::GetReplicaList(std::string_view key)
     replica_list.reserve(metadata.replicas.size());
     for (const auto& replica : metadata.replicas) {
         replica_list.emplace_back(replica.get_descriptor());
-        LOG(INFO) << "Replica(key = " << key << ") on " << replica.get_descriptor().get_storage_level();
+        // LOG(INFO) << "Replica(key = " << key << ") on " << replica.get_descriptor().get_storage_level();
     }
 
     // Only mark for GC if enabled
@@ -423,9 +423,9 @@ auto MasterService::PutStart(const std::string& key,
                     return tl::make_unexpected(ErrorCode::NO_AVAILABLE_HANDLE);
                 }
 
-                LOG(INFO) << "key=" << key << ", replica_id=" << i
-                        << ", slice_index=" << j << ", handle=" << *handle
-                        << ", action=slice_allocated";
+                // LOG(INFO) << "key=" << key << ", replica_id=" << i
+                //         << ", slice_index=" << j << ", handle=" << *handle
+                //         << ", action=slice_allocated";
                 handles.emplace_back(std::move(handle));
             }
 
