@@ -282,7 +282,7 @@ TEST_F(CXLTransportTest, MultipleWriteThenReadCuda) {
         entry.target_id = segment_id;
         entry.target_offset = offset_3;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         LOG_ASSERT(s.ok());
         
         bool completed = false;
@@ -317,7 +317,7 @@ TEST_F(CXLTransportTest, MultipleWriteThenReadCuda) {
         entry.target_offset = offset_3;
         Status s;
         // s = xport->submitTransfer(batch_id, {entry});
-        s = engine->submitTransfer(batch_id, {entry});
+        s = engine->submitTransfer(batch_id, {entry}, FLAGS_protocol);
         ASSERT_EQ(s, Status::OK());
 
         bool completed = false;
