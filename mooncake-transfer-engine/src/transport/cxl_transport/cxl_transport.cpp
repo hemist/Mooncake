@@ -428,10 +428,24 @@ Status CxlTransport::submitTransfer(
           << " dest=0x" << slice->cxl.dest_addr
           << " length=" << std::dec << slice->length;
         int err;
-        if (slice->opcode == TransferRequest::READ)
+        if (slice->opcode == TransferRequest::READ) {
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
                              slice->length);
+            std::ostringstream oss;
+            oss << "READ slice source_addr dump (first 256 bytes max):\n";
+            const unsigned char *p =
+                reinterpret_cast<const unsigned char *>(slice->source_addr);
+            size_t dump_len = std::min<size_t>(slice->length, 256);
+            for (size_t i = 0; i < dump_len; ++i) {
+                if (i % 16 == 0) oss << std::hex << std::setw(4)
+                                       << std::setfill('0') << i << ":";
+                oss << " " << std::hex << std::setw(2) << std::setfill('0')
+                    << static_cast<unsigned>(p[i]);
+                if ((i + 1) % 16 == 0 || i + 1 == dump_len) oss << "\n";
+            }
+            LOG(INFO) << oss.str();
+        }
         else
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
