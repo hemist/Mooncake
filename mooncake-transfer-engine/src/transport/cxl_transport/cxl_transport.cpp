@@ -146,7 +146,7 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
     auto result = dml::execute<dml::hardware>(dml::copy_crc, dml::make_view(c_src, size),
                     dml::make_view(c_dst, size), crc_seed);
 
-    // Check result
+    // Check results
     if (result.status == dml::status_code::ok) {
         //LOG(INFO) << "DSA copy successed. from " << src << " to " << dest << " len:" << size;
         return 0;
@@ -159,6 +159,19 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
     return 0;
 }
 #endif
+
+#define CL_SIZE 64
+static inline void
+__flush_processor_cache(const void *addr, size_t len)
+{
+	int64_t i;
+	const char *buffer = (const char *)addr;
+
+	/* Flush the processor cache for the target range */
+	for (i=0; i<len; i+=CL_SIZE)
+		__builtin_ia32_clflush(&buffer[i]); 
+
+}
 
 int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     // Input validation
@@ -203,6 +216,33 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
         // Ensure memory ordering for CXL operations
         __sync_synchronize();
+        __flush_processor_cache(dest, size);
+	    __sync_synchronize();
+    }
+
+    {
+        const int MAX_DUMP = 64;               // 最多打印 64 字节
+        char buf_d[MAX_DUMP + 4] = {0};        // +4 给末尾 "...>" 和 \0
+        char buf_s[MAX_DUMP + 4] = {0};
+
+        int copy_d = (size < MAX_DUMP) ? static_cast<int>(size) : MAX_DUMP;
+        int copy_s = copy_d;
+
+        std::memcpy(buf_d, dest, copy_d);
+        std::memcpy(buf_s, src,  copy_s);
+
+        if (size > MAX_DUMP) {                 // 超长标记
+            std::strcpy(buf_d + MAX_DUMP, "...");
+            std::strcpy(buf_s + MAX_DUMP, "...");
+        }
+
+        // 统一走 stderr，方便和正常日志区分
+        std::fprintf(stderr,
+                    "[CXL-DEBUG] memcpy@%p <-- %p  len=%zu\n"
+                    "    dest[:64]=<%s>\n"
+                    "    src [:64]=<%s>\n\n",
+                    dest, src, size,
+                    buf_d, buf_s);
     }
 #endif
     return 0; // success
