@@ -38,6 +38,42 @@ int64_t to_py_ret(const tl::expected<T, ErrorCode> &exp) noexcept {
     }
 }
 
+struct UpgradeTask {
+    std::string key;
+    std::vector<Slice> slices;
+    std::shared_ptr<ReplicateConfig> config;
+
+    UpgradeTask(const std::string &key,
+                const std::vector<Slice>& slices_ref,
+                std::shared_ptr<ReplicateConfig> config)
+        : key(key), 
+          slices(slices_ref), 
+          config(std::move(config)) {}
+};
+
+class UpgradeThreadPool {
+   public:
+    explicit UpgradeThreadPool(const std::shared_ptr<Client>& client_);
+    ~UpgradeThreadPool();
+
+    UpgradeThreadPool(const UpgradeThreadPool&) = delete;
+    UpgradeThreadPool& operator=(const UpgradeThreadPool&) = delete;
+    UpgradeThreadPool(UpgradeThreadPool&&) = delete;
+    UpgradeThreadPool& operator=(UpgradeThreadPool&&) = delete;
+
+    void submitTask(UpgradeTask task);
+
+   private:
+    void threadFunc();
+
+    std::vector<std::thread> threads_;
+    std::queue<UpgradeTask> queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::atomic<bool> shutdown_;
+    std::shared_ptr<Client> client_;
+};
+
 // Global resource tracker to handle cleanup on abnormal termination
 class ResourceTracker {
    public:
@@ -369,6 +405,7 @@ class DistributedObjectStore {
     std::vector<std::string> protocols;
     std::string device_name;
     std::string local_hostname;
+    std::unique_ptr<UpgradeThreadPool> upgrade_thread_pool_;
 };
 
 }  // namespace mooncake

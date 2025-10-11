@@ -89,6 +89,81 @@ struct TensorMetadata {
     int32_t shape[4];
 };
 
+
+/**
+ * Migrate Thread Pool Implementation
+ */
+constexpr size_t kMaxMigrateThreads = 10;
+
+UpgradeThreadPool::UpgradeThreadPool(const std::shared_ptr<Client>& client) 
+    : shutdown_(false), client_(client) {
+    LOG(INFO) << "Starting migrate thread pool with " << kMaxMigrateThreads
+              << " threads";
+              
+    threads_.reserve(kMaxMigrateThreads);
+    for (size_t i = 0; i < kMaxMigrateThreads; i++) {
+        threads_.emplace_back(&UpgradeThreadPool::threadFunc, this);
+    }
+}
+
+UpgradeThreadPool::~UpgradeThreadPool() {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        shutdown_.store(true);
+    }
+
+    queue_cv_.notify_all();
+    for (auto& thread : threads_) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    LOG(INFO) << "Migrate thread pool destroyed";
+}
+
+void UpgradeThreadPool::submitTask(UpgradeTask task) { 
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (shutdown_.load()) {
+            LOG(ERROR) << "Migrate thread pool is shutting down";
+            return;
+        }
+        queue_.push(std::move(task));
+    }
+    queue_cv_.notify_one();
+}
+
+void UpgradeThreadPool::threadFunc() { 
+    while (true) { 
+        UpgradeTask task("", {}, nullptr);
+
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this] {
+                return shutdown_.load() || !queue_.empty();
+            });
+
+            if (shutdown_.load()) {
+                return;
+            }
+
+            if (!queue_.empty()) {
+                task = std::move(queue_.front());
+                queue_.pop();
+            }
+        }
+
+        if (!task.key.empty() && task.config != nullptr) {
+            // LOG(INFO) << "Upgrate migrate task: " << task.key;
+            ObjectKey key(task.key);
+            client_->Put(key, task.slices, *task.config);
+            LOG(INFO) << "Upgrate migrate task: " << task.key << " successfully";
+        }
+    }
+}
+
+
+
 // ResourceTracker implementation using singleton pattern
 ResourceTracker &ResourceTracker::getInstance() {
     static ResourceTracker instance;
@@ -249,6 +324,8 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
                    << toString(result.error());
         return tl::unexpected(result.error());
     }
+
+    upgrade_thread_pool_ = std::make_unique<UpgradeThreadPool>(client_);
 
     // If global_segment_size is 0, skip mount segment;
     // If global_segment_size is larger than max_mr_size, split to multiple
@@ -609,6 +686,15 @@ pybind11::bytes DistributedObjectStore::get(const std::string &key) {
                        << toString(get_result.error());
             return kNullString;
         }
+
+        int current_level = static_cast<int>(replica.get_storage_level());
+        if (current_level > 0) {
+            auto config = std::make_shared<ReplicateConfig>();
+            config->preferred_storage_level = static_cast<StorageLevel>(current_level + 1);
+            UpgradeTask task(key, slices, config);
+            upgrade_thread_pool_->submitTask(std::move(task));
+        }
+        
 
         py::gil_scoped_acquire acquire_gil;
 

@@ -490,7 +490,7 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
     // Add client info into replica_config for storage level strategy
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
-    client_config.preferred_storage_level = StorageLevel::CXL;
+    // client_config.preferred_storage_level = StorageLevel::CXL;
 
     // Start put operation
     auto start_result = master_client_.PutStart(key, slice_lengths, client_config);
@@ -1384,12 +1384,18 @@ void Client::PingThreadFunc() {
 ErrorCode Client::FindFirstCompleteReplica(
     const std::vector<Replica::Descriptor>& replica_list,
     Replica::Descriptor& replica) {
+    bool found = false;
     // Find the first complete replica
     for (size_t i = 0; i < replica_list.size(); ++i) {
         if (replica_list[i].status == ReplicaStatus::COMPLETE) {
             replica = replica_list[i];
-            return ErrorCode::OK;
+            found = true;
+            break;
         }
+    }
+
+    if (found) {
+        return ErrorCode::OK;
     }
 
     // No complete replica found
