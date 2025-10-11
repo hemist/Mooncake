@@ -219,31 +219,6 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
         __flush_processor_cache(dest, size);
 	    __sync_synchronize();
     }
-
-    {
-        const int MAX_DUMP = 64;               // 最多打印 64 字节
-        char buf_d[MAX_DUMP + 4] = {0};        // +4 给末尾 "...>" 和 \0
-        char buf_s[MAX_DUMP + 4] = {0};
-
-        int copy_d = (size < MAX_DUMP) ? static_cast<int>(size) : MAX_DUMP;
-        int copy_s = copy_d;
-
-        std::memcpy(buf_d, dest, copy_d);
-        std::memcpy(buf_s, src,  copy_s);
-
-        if (size > MAX_DUMP) {                 // 超长标记
-            std::strcpy(buf_d + MAX_DUMP, "...");
-            std::strcpy(buf_s + MAX_DUMP, "...");
-        }
-
-        // 统一走 stderr，方便和正常日志区分
-        std::fprintf(stderr,
-                    "[CXL-DEBUG] memcpy@%p <-- %p  len=%zu\n"
-                    "    dest[:64]=<%s>\n"
-                    "    src [:64]=<%s>\n\n",
-                    dest, src, size,
-                    buf_d, buf_s);
-    }
 #endif
     return 0; // success
 }

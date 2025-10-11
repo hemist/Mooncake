@@ -1434,7 +1434,7 @@ DistributedObjectStore::batch_get_into_internal(
             }
         }
 
-        LOG(INFO) << "Replica level: " << replica.get_storage_level();
+        // LOG(INFO) << "Replica level: " << replica.get_storage_level();
 
         // Store operation info for batch processing
         valid_operations.push_back({.key = key,

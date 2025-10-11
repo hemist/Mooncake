@@ -311,11 +311,14 @@ auto MasterService::GetReplicaList(std::string_view key)
         return tl::make_unexpected(ErrorCode::REPLICA_IS_NOT_READY);
     }
 
+    StorageLevel level = StorageLevel::NUM_STORAGE_LEVELS;
     std::vector<Replica::Descriptor> replica_list;
     replica_list.reserve(metadata.replicas.size());
     for (const auto& replica : metadata.replicas) {
         replica_list.emplace_back(replica.get_descriptor());
-        // LOG(INFO) << "Replica(key = " << key << ") on " << replica.get_descriptor().get_storage_level();
+        if (level == StorageLevel::NUM_STORAGE_LEVELS) {
+            level = replica.get_descriptor().get_storage_level();
+        }
     }
 
     // Only mark for GC if enabled
@@ -326,6 +329,12 @@ auto MasterService::GetReplicaList(std::string_view key)
         // Grant a lease to the object so it will not be removed
         // when the client is reading it.
         metadata.GrantLease(default_kv_lease_ttl_, default_kv_soft_pin_ttl_);
+    }
+
+    if (level == StorageLevel::RAM) {
+        MasterMetricManager::instance().inc_ram_key_count(1);
+    } else if (level == StorageLevel::CXL) {
+        MasterMetricManager::instance().inc_cxl_key_count(1);
     }
 
     return replica_list;

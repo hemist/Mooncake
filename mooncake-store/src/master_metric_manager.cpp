@@ -35,7 +35,11 @@ MasterMetricManager::MasterMetricManager()
       degraded_queue_size_("master_degraged_queue_size",
                            "Total number of degraded requests"),
       key_count_("master_key_count",
-                 "Total number of keys managed by the master"),
+                            "Total number of keys managed by the master"),
+      ram_key_count_("master_ram_key_count",
+                            "Total number of ram keys managed by the master"),
+      cxl_key_count_("master_cxl_key_count",
+                            "Total number of cxl keys managed by the master"),
       degraded_queue_key_count_("master_degraded_queue_key_count",
                           "Total number of degraded keys managed by the master"),
       soft_pin_key_count_("master_soft_pin_key_count",
@@ -254,6 +258,12 @@ std::vector<double> MasterMetricManager::get_global_used_ratio(void) {
 void MasterMetricManager::inc_key_count(int64_t val) { key_count_.inc(val); }
 void MasterMetricManager::dec_key_count(int64_t val) { key_count_.dec(val); }
 
+void MasterMetricManager::inc_ram_key_count(int64_t val) { ram_key_count_.inc(val); }
+
+void MasterMetricManager::dec_ram_key_count(int64_t val) { ram_key_count_.dec(val); }
+void MasterMetricManager::inc_cxl_key_count(int64_t val) { cxl_key_count_.inc(val); }
+void MasterMetricManager::dec_cxl_key_count(int64_t val) { cxl_key_count_.dec(val); }
+
 void MasterMetricManager::inc_degraded_queue_key_count(int64_t val) { degraded_queue_key_count_.inc(val); }
     
 void MasterMetricManager::dec_degraded_queue_key_count(int64_t val) { degraded_queue_key_count_.dec(val); }
@@ -267,6 +277,14 @@ void MasterMetricManager::observe_value_size(int64_t size) {
 
 int64_t MasterMetricManager::get_key_count() {
     return key_count_.value();
+}
+
+int64_t MasterMetricManager::get_ram_key_count() {
+    return ram_key_count_.value();
+}
+
+int64_t MasterMetricManager::get_cxl_key_count() {
+    return cxl_key_count_.value();
 }
 
 int64_t MasterMetricManager::get_degraded_queue_key_count() {
@@ -613,6 +631,8 @@ std::string MasterMetricManager::serialize_metrics() {
     serialize_metric(allocated_size_);
     serialize_metric(total_capacity_);
     serialize_metric(key_count_);
+    serialize_metric(ram_key_count_);
+    serialize_metric(cxl_key_count_);
     serialize_metric(degraded_queue_key_count_);
     serialize_metric(soft_pin_key_count_);
     if (enable_ha_) {
@@ -706,6 +726,8 @@ std::string MasterMetricManager::get_summary_string() {
     int64_t ssd_capacity = total_ssd_capacity_.value();
     int64_t degraded_queue_size = degraded_queue_size_.value();
     int64_t keys = key_count_.value();
+    int64_t ram_keys = ram_key_count_.value();
+    int64_t cxl_keys = cxl_key_count_.value();
     int64_t degraded_queue_keys = degraded_queue_key_count_.value();
     int64_t soft_pin_keys = soft_pin_key_count_.value();
     int64_t active_clients = active_clients_.value();
@@ -752,7 +774,12 @@ std::string MasterMetricManager::get_summary_string() {
        << format_bytes(cxl_capacity) << ", ";
     ss << "SSD: " << format_bytes(ssd_allocated) << " / "
        << format_bytes(ssd_capacity);
-    ss << " | Keys: " << keys << " (soft-pinned: " << soft_pin_keys << ")";
+
+    double ram_key_ratio = (keys <= 0) ? 0.0 : (double)ram_keys / (double)keys * 100.0;
+    double cxl_key_ratio = (keys <= 0) ? 0.0 : (double)cxl_keys / (double)keys * 100.0;
+    ss << " | Keys: " << keys << " [soft-pinned: " << soft_pin_keys 
+       << ", ram: " << ram_keys << "(" << ram_key_ratio << "%)"
+       << ", cxl: " << cxl_keys << "(" << cxl_key_ratio << "%)]";
     if (enable_ha_) {
         ss << " | Clients: " << active_clients;
     }
