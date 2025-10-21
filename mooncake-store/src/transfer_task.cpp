@@ -556,7 +556,7 @@ std::optional<TransferFuture> TransferSubmitter::submit(
 void TransferSubmitter::receive(TransferFuture& future) {
     BatchID batch_id = future.getBatchID();
     if (batch_id == Transport::INVALID_BATCH_ID) {
-        LOG(INFO) << "Invalid batch id received";
+        // LOG(INFO) << "Invalid batch id received";
         return;
     }
 

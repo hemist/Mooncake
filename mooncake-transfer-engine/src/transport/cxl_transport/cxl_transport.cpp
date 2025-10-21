@@ -268,7 +268,7 @@ int CxlTransport::cxlDevInit()
 
     void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     // LOG(INFO) << "CxlTransport: use normal mmap.";
-    LOG(INFO) << "CxlTransport: use fixed mmap.";
+    LOG(INFO) << "CxlTransport: use mmap, size:" << cxl_dev_size/1024/1024/1024 << "GB";
     if (ptr == MAP_FAILED) {
         close(fd);
         return ERR_MEMORY;

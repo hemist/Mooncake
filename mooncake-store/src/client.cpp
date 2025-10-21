@@ -354,11 +354,12 @@ Client::BatchQuery(const std::vector<std::string>& object_keys) {
     // For failed queries, check storage backend if available
     if (storage_backend_) {
         for (size_t i = 0; i < response.size(); ++i) {
-            if (!response[i]) {
+            // if (!response[i]) {
                 if (auto desc_opt = storage_backend_->Querykey(object_keys[i])) {
+                    LOG(INFO) << "Transfer from file backend.";
                     response[i] = std::vector<Replica::Descriptor>{std::move(*desc_opt)};
                 }
-            }
+            // }
         }
     }
 
