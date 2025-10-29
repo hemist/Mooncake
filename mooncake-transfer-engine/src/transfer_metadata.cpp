@@ -416,7 +416,7 @@ std::shared_ptr<TransferMetadata::SegmentDesc> TransferMetadata::getSegmentDesc(
         }
     }
 
-    LOG(INFO) << "peer json" << peer_json;
+    // LOG(INFO) << "peer json" << peer_json;
 
     return decodeSegmentDesc(peer_json, segment_name);
 }

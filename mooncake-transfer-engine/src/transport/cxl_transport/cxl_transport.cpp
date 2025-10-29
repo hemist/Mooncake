@@ -50,24 +50,65 @@
 
 bool isCudaAddress(void* ptr) {
     if (ptr == nullptr) {
+        LOG(ERROR) << "isCudaAddress: null pointer provided";
         return false;
     }
 
-    cudaPointerAttributes attributes;
-    cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
-    if (err != cudaSuccess) {
-        return false;
+    // 确保CUDA运行时已经初始化
+    static bool cuda_initialized = false;
+    if (!cuda_initialized) {
+        cudaFree(0);
+        cuda_initialized = true;
     }
+
+    cudaPointerAttributes attributes;
+    cudaError_t error = cudaPointerGetAttributes(&attributes, ptr);
+
+    if (error == cudaSuccess) {
+        if (attributes.type == cudaMemoryTypeDevice) {
+            // 设备内存
+            LOG(INFO) << "Device memory";
+        } else if (attributes.type == cudaMemoryTypeHost) {
+            // 主机内存  
+            LOG(INFO) << "Host memory";
+        } else if (attributes.type == cudaMemoryTypeUnregistered) {
+            // 可能是统一内存
+            LOG(INFO) << "Unregistered memory, likely unified memory";
+            
+            // 对于统一内存，可以尝试查询设备属性
+            cudaDeviceProp prop;
+            cudaGetDeviceProperties(&prop, 0);
+            if (prop.unifiedAddressing) {
+                LOG(INFO) << "Unified addressing is supported";
+            }
+        }
+    } else {
+        LOG(ERROR) << "cudaPointerGetAttributes failed: " << cudaGetErrorString(error);
+    }
+
+
+    LOG(ERROR) << "isCudaAddress: Pointer " << ptr 
+            << " has type=" << attributes.type
+            << ", devicePointer=" << attributes.devicePointer
+            << ", hostPointer=" << attributes.hostPointer
+            << ", device=" << attributes.device;
     
     // 根据CUDA版本使用适当的判断方法
     #if CUDA_VERSION >= 11000
     // CUDA 11.0及以上版本
-    // 检查是否为设备指针且不是统一内存(managed memory)
-    return (attributes.devicePointer != nullptr) && !attributes.isManaged;
+    // 检查内存类型是否为设备内存
+    bool result = (attributes.type == cudaMemoryTypeDevice) && !attributes.isManaged;
+    LOG(ERROR) << "isCudaAddress: Result=" << result 
+            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
+            << " (isManaged)=" << attributes.isManaged;
+    return result;
     #else
     // 旧版CUDA (10.x及以下)
-    // 检查内存类型是否为设备内存（排除统一内存）
-    return (attributes.type == cudaMemoryTypeDevice);
+    // 检查内存类型是否为设备内存
+    bool result = (attributes.type == cudaMemoryTypeDevice);
+    LOG(ERROR) << "isCudaAddress: Result=" << result 
+            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
+    return result;
     #endif
 }
 
