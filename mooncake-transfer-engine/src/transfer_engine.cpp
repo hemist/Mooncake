@@ -344,7 +344,7 @@ int TransferEngine::registerLocalMemory(std::unordered_map<std::string,
             if (ret < 0) {
                 LOG(ERROR) << "RegisterLocalMemory failed, transport: " 
                            << transport->getName() << " buffer: " 
-                           << buffer.addr << " length: " << buffer.length ;
+                           << buffer.addr << " length: " << buffer.length;
                 break;
             }
             registered_buffers.push_back(

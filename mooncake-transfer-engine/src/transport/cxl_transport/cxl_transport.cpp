@@ -48,66 +48,83 @@
         } \
     } while(0)
 
-bool isCudaAddress(void* ptr) {
+bool isCudaAddress(void* ptr) {    
     if (ptr == nullptr) {
-        LOG(ERROR) << "isCudaAddress: null pointer provided";
+        std::cout << "ERROR: check_cuda_memory: null pointer provided" << std::endl;
         return false;
     }
 
     // 确保CUDA运行时已经初始化
     static bool cuda_initialized = false;
     if (!cuda_initialized) {
-        cudaFree(0);
+        cudaError_t init_error = cudaFree(0);
+        if (init_error != cudaSuccess) {
+            std::cout << "WARNING: cudaFree(0) failed: " << cudaGetErrorString(init_error) << std::endl;
+        }
         cuda_initialized = true;
     }
 
     cudaPointerAttributes attributes;
     cudaError_t error = cudaPointerGetAttributes(&attributes, ptr);
 
-    if (error == cudaSuccess) {
-        if (attributes.type == cudaMemoryTypeDevice) {
-            // 设备内存
-            LOG(INFO) << "Device memory";
-        } else if (attributes.type == cudaMemoryTypeHost) {
-            // 主机内存  
-            LOG(INFO) << "Host memory";
-        } else if (attributes.type == cudaMemoryTypeUnregistered) {
-            // 可能是统一内存
-            LOG(INFO) << "Unregistered memory, likely unified memory";
-            
-            // 对于统一内存，可以尝试查询设备属性
-            cudaDeviceProp prop;
-            cudaGetDeviceProperties(&prop, 0);
-            if (prop.unifiedAddressing) {
-                LOG(INFO) << "Unified addressing is supported";
-            }
-        }
-    } else {
-        LOG(ERROR) << "cudaPointerGetAttributes failed: " << cudaGetErrorString(error);
-    }
+    // std::cout << "=== CUDA Memory Check Results ===" << std::endl;
+    // std::cout << "Pointer: " << ptr << " (0x" << std::hex << ptr << std::dec << ")" << std::endl;
 
-
-    LOG(ERROR) << "isCudaAddress: Pointer " << ptr 
-            << " has type=" << attributes.type
-            << ", devicePointer=" << attributes.devicePointer
-            << ", hostPointer=" << attributes.hostPointer
-            << ", device=" << attributes.device;
+    // if (error == cudaSuccess) {
+    //     switch (attributes.type) {
+    //         case cudaMemoryTypeDevice:
+    //             std::cout << "Memory type: Device memory" << std::endl;
+    //             std::cout << "Device: " << attributes.device << std::endl;
+    //             std::cout << "Device pointer: " << attributes.devicePointer << std::endl;
+    //             break;
+    //         case cudaMemoryTypeHost:
+    //             std::cout << "Memory type: Host memory" << std::endl;
+    //             std::cout << "Host pointer: " << attributes.hostPointer << std::endl;
+    //             break;
+    //         case cudaMemoryTypeUnregistered:
+    //             std::cout << "Memory type: Unregistered memory (likely unified memory)" << std::endl;
+    //             // 检查是否支持统一内存
+    //             cudaDeviceProp prop;
+    //             cudaGetDeviceProperties(&prop, 0);
+    //             if (prop.unifiedAddressing) {
+    //                 std::cout << "Unified addressing is supported" << std::endl;
+    //             }
+    //             break;
+    //         case cudaMemoryTypeManaged:
+    //             std::cout << "Memory type: Managed memory (UVA)" << std::endl;
+    //             break;
+    //         default:
+    //             std::cout << "Memory type: Unknown" << std::endl;
+    //             break;
+    //     }
+        
+    //     std::cout << "Detailed attributes:" << std::endl;
+    //     std::cout << "  type: " << attributes.type << std::endl;
+    //     std::cout << "  device: " << attributes.device << std::endl;
+    //     std::cout << "  devicePointer: " << attributes.devicePointer << std::endl;
+    //     std::cout << "  hostPointer: " << attributes.hostPointer << std::endl;
+        
+    // } else {
+    //     std::cout << "ERROR: cudaPointerGetAttributes failed: " << cudaGetErrorString(error) << std::endl;
+    //     std::cout << "Error code: " << error << std::endl;
+    // }
+    // std::cout << "=================================" << std::endl;
     
     // 根据CUDA版本使用适当的判断方法
     #if CUDA_VERSION >= 11000
     // CUDA 11.0及以上版本
     // 检查内存类型是否为设备内存
     bool result = (attributes.type == cudaMemoryTypeDevice) && !attributes.isManaged;
-    LOG(ERROR) << "isCudaAddress: Result=" << result 
-            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
-            << " (isManaged)=" << attributes.isManaged;
+    // LOG(ERROR) << "isCudaAddress: Result=" << result 
+    //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
+    //         << " (isManaged)=" << attributes.isManaged;
     return result;
     #else
     // 旧版CUDA (10.x及以下)
     // 检查内存类型是否为设备内存
     bool result = (attributes.type == cudaMemoryTypeDevice);
-    LOG(ERROR) << "isCudaAddress: Result=" << result 
-            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
+    // LOG(ERROR) << "isCudaAddress: Result=" << result 
+    //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
     return result;
     #endif
 }
