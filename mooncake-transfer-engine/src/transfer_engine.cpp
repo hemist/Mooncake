@@ -179,7 +179,8 @@ int TransferEngine::init(const std::string &metadata_conn_string,
             }
         }
 #else
-        if (local_topology_->getHcaList().size() > 0) {
+        // if (local_topology_->getHcaList().size() > 0) {
+        if (!filter_.empty() && local_topology_->getHcaList().size() > 0) {
             // only install RDMA transport when there is at least one HCA
             Transport* rdma_transport = multi_transports_->installTransport("rdma", local_topology_);
             if (!rdma_transport) {

@@ -271,9 +271,10 @@ tl::expected<void, ErrorCode> Client::Get(const std::string& object_key,
 std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     const std::vector<std::string>& object_keys,
     std::unordered_map<std::string, std::vector<Slice>>& slices) {
-    LOG(INFO) << "BatchQuery Start";
+
+    auto start_total_time = std::chrono::high_resolution_clock::now();
     auto batched_query_results = BatchQuery(object_keys);
-    LOG(INFO) << "BatchQuery End";
+    auto end_batch_query_time = std::chrono::high_resolution_clock::now();
 
     // If any queries failed, return error results immediately for failed
     // queries
@@ -314,6 +315,18 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
             results[valid_indices[i]] = valid_results[i];
         }
     }
+    auto end_total_time = std::chrono::high_resolution_clock::now();
+
+    LOG(INFO) << "BatchGet total time: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     end_total_time - start_total_time)
+                     .count()
+              << " us, "
+              << " BatchGet batch query time: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_batch_query_time - start_total_time)
+                     .count()
+              << " us";
 
     return results;
 }
@@ -335,7 +348,14 @@ tl::expected<std::vector<Replica::Descriptor>, ErrorCode> Client::Query(
 
 std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
 Client::BatchQuery(const std::vector<std::string>& object_keys) {
+    auto start_query = std::chrono::high_resolution_clock::now();
     auto response = master_client_.BatchGetReplicaList(object_keys);
+    auto end_query = std::chrono::high_resolution_clock::now();
+    LOG(INFO) << "BatchQuery time: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     end_query - start_query)
+                     .count()
+              << " us";
 
     // Check if we got the expected number of responses
     if (response.size() != object_keys.size()) {
@@ -418,7 +438,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         pending_transfers;
     std::vector<tl::expected<void, ErrorCode>> results(object_keys.size());
 
-    LOG(INFO) << "Parallel Submit Start";
+    auto start_transfer = std::chrono::high_resolution_clock::now();
 
     // Submit all transfers in parallel
     for (size_t i = 0; i < object_keys.size(); ++i) {
@@ -473,7 +493,12 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         }
     }
 
-    LOG(INFO) << "Parallel Submit End";
+    auto end_transfer = std::chrono::high_resolution_clock::now();
+    LOG(INFO) << "BatchGet transfer time: "
+             << std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_transfer - start_transfer)
+                    .count()
+             << " us";
 
     VLOG(1) << "BatchGet completed for " << object_keys.size() << " keys";
     return results;
@@ -932,13 +957,27 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     client_config.client_id = client_id_;
     // client_config.preferred_storage_level = StorageLevel::CXL;
 
+    auto start_total_time = std::chrono::high_resolution_clock::now();
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);
+    auto end_batch_put_time = std::chrono::high_resolution_clock::now();
     SubmitTransfers(ops);
     WaitForTransfers(ops);
     FinalizeBatchPut(ops);
     BatchPuttoLocalFile(ops);
-    return CollectResults(ops);
+    auto res = CollectResults(ops);
+    auto end_total_time = std::chrono::high_resolution_clock::now();
+
+    LOG(INFO) << "BatchPut total time: "
+             << std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_total_time - start_total_time)
+                    .count()
+             << "us, batchPut time: "
+             << std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_batch_put_time - start_total_time)
+                    .count()
+             << "us";
+    return res;
 }
 
 tl::expected<void, ErrorCode> Client::Remove(const ObjectKey& key) {

@@ -9,10 +9,10 @@
 
 DEFINE_string(protocol, "cxl,tcp", "Transfer protocol: rdma|tcp|cxl");
 DEFINE_string(device_name, "enp1s0", "Device name to use, valid if protocol=rdma|tcp");
-DEFINE_string(transfer_engine_metadata_url, "etcd://10.129.131.15:2379", "Metadata connection string for transfer engine");
+DEFINE_string(transfer_engine_metadata_url, "etcd://10.130.5.132:2379", "Metadata connection string for transfer engine");
 DEFINE_uint64(default_kv_lease_ttl, mooncake::DEFAULT_DEFAULT_KV_LEASE_TTL,
               "Default lease time for kv objects, must be set to the same as the master's default_kv_lease_ttl");
-DEFINE_string(cxl_device_name, "/dev/dax0.0", "Device name for cxl");
+DEFINE_string(cxl_device_name, "/var/dax0.0", "Device name for cxl");
 DEFINE_uint64(cxl_device_size, 4294967296, "Device Size for cxl");
 DEFINE_bool(auto_disc, true, "Auto discover tcp devices");
 DEFINE_uint64(segment_size, 512UL * 1024 * 1024, "Segment size");
@@ -52,6 +52,7 @@ class LevelStorageTest : public ::testing::Test {
     static void SetUpTestSuite() {
         // Initialize glog
         google::InitGoogleLogging("ClientIntegrationTest");
+        FLAGS_logtostderr = true;
 
         // Override flags from environment variables if present
         setenv("MC_CXL_DEV_PATH", FLAGS_cxl_device_name.c_str(), 1);
@@ -213,6 +214,47 @@ TEST_F(LevelStorageTest, BasicPutGetOperations) {
     ASSERT_TRUE(remove_result.has_value())
         << "Remove operation failed: " << toString(remove_result.error());
     client_buffer_allocator_->deallocate(buffer, test_data.size());
+}
+
+TEST_F(LevelStorageTest, PutGetLatencyOperations) {
+    size_t test_data_size = 64;
+    std::string test_data = std::string(test_data_size, 'a');
+    const std::string key = "test_key1";
+
+    void* buffer = client_buffer_allocator_->allocate(test_data_size);
+    memcpy(buffer, test_data.data(), test_data.size());
+    std::vector<Slice> slices;
+    slices.emplace_back(Slice{buffer, test_data.size()});
+
+    // Test Put operation
+    ReplicateConfig config;
+    config.replica_num = 1;
+    config.preferred_storage_level = StorageLevel::CXL;
+
+    auto start_put = std::chrono::high_resolution_clock::now();
+    auto put_result = test_client_->Put(key, slices, config);
+    auto end_put = std::chrono::high_resolution_clock::now();
+    ASSERT_TRUE(put_result.has_value())
+        << "Put operation failed: " << toString(put_result.error());
+    
+    client_buffer_allocator_->deallocate(buffer, test_data.size());
+    slices.clear();
+    slices.emplace_back(Slice{buffer, test_data.size()});
+
+    auto start_get = std::chrono::high_resolution_clock::now();
+    auto get_result = test_client_->Get(key, slices);
+    auto end_get = std::chrono::high_resolution_clock::now();
+
+    ASSERT_TRUE(get_result.has_value())
+        << "Get operation failed: " << toString(get_result.error());
+    
+    LOG(INFO) << "Put latency: " << std::chrono::duration_cast<std::chrono::microseconds>(end_put - start_put).count() << "us"
+    << " Get latency: " << std::chrono::duration_cast<std::chrono::microseconds>(end_get - start_get).count() << "us";
+
+    slices.clear();
+    slices.emplace_back(Slice{buffer, test_data.size()});
+    client_buffer_allocator_->deallocate(buffer, test_data.size());
+
 }
 
 

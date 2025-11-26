@@ -1252,7 +1252,7 @@ std::vector<int> DistributedObjectStore::batch_put_from_into_cxl(
 std::vector<int> DistributedObjectStore::batch_get_into(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes) {
-    LOG(INFO) << "[GET-start] batch_get_into start";
+    auto start_total_time = std::chrono::high_resolution_clock::now();
     auto internal_results = batch_get_into_internal(keys, buffers, sizes);
     std::vector<int> results;
     results.reserve(internal_results.size());
@@ -1260,7 +1260,12 @@ std::vector<int> DistributedObjectStore::batch_get_into(
     for (const auto &result : internal_results) {
         results.push_back(to_py_ret(result));
     }
-    LOG(INFO) << "[GET-end] batch_get_into end";
+    auto end_total_time = std::chrono::high_resolution_clock::now();
+    LOG(INFO) << "BatchPut total time: "
+             << std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_total_time - start_total_time)
+                    .count()
+             << "us";
     return results;
 }
 
@@ -1364,9 +1369,7 @@ DistributedObjectStore::batch_get_into_internal(
     }
 
     // Query metadata for all keys
-    LOG(INFO) << "[RPC-start] BatchQuery start";
     const auto query_results = client_->BatchQuery(keys);
-    LOG(INFO) << "[RPC-end] BatchQuery end";
 
     // Process each key individually and prepare for batch transfer
     struct ValidKeyInfo {
@@ -1611,10 +1614,10 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     if (valid_operations.empty()) {
         return results;
     }
-    LOG(INFO) << "Batch reading statistics:"
-          << " total requested keys =" << keys.size()
-          << ", valid keys =" << valid_operations.size()
-          << ", total CXL replicas =" << valid_operations.size();
+    // LOG(INFO) << "Batch reading statistics:"
+    //       << " total requested keys =" << keys.size()
+    //       << ", valid keys =" << valid_operations.size()
+    //       << ", total CXL replicas =" << valid_operations.size();
 
     std::vector<std::string> batch_keys;  
     std::vector<std::vector<Replica::Descriptor>> batch_replica_lists; 
