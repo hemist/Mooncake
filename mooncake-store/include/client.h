@@ -109,6 +109,18 @@ class Client {
         std::unordered_map<std::string, std::vector<Slice>>& slices);
 
     /**
+     * @brief Transfers data using pre-queried object information
+     * @param object_keys Keys of the objects
+     * @param object_infos Previously queried object metadata
+     * @param slices Map of object keys to their data slices
+     * @return ErrorCode indicating success/failure
+     */
+    std::vector<tl::expected<void, ErrorCode>> BatchGetCxl(
+        const std::vector<std::string>& object_keys,
+        const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
+        std::unordered_map<std::string, std::vector<Slice>>& slices);
+
+    /**
      * @brief Stores data with replication
      * @param key Object key
      * @param slices Vector of data slices to store
@@ -237,6 +249,11 @@ class Client {
     ErrorCode TransferRead(const Replica::Descriptor& replica,
                            std::vector<Slice>& slices);
 
+    ErrorCode TransferDataKernel(const std::vector<Replica::Descriptor>& replica_list,
+                            std::vector<std::vector<Slice>>& slices_list,
+                            TransferRequest::OpCode op_code);
+                           
+
     /**
      * @brief Prepare and use the storage backend for persisting data
      */
@@ -265,7 +282,8 @@ class Client {
         const std::vector<std::vector<Slice>>& batched_slices);
     void StartBatchPut(std::vector<PutOperation>& ops,
                        const ReplicateConfig& config);
-    void SubmitTransfers(std::vector<PutOperation>& ops);
+    void SubmitPutTransfers(std::vector<PutOperation>& ops,
+                        const ReplicateConfig& config);
     void WaitForTransfers(std::vector<PutOperation>& ops);
     void FinalizeBatchPut(std::vector<PutOperation>& ops);
     void BatchPuttoLocalFile(std::vector<PutOperation>& ops);

@@ -534,6 +534,52 @@ Status CxlTransport::submitTransfer(
 
 Status CxlTransport::submitTransferTask(
     const std::vector<TransferTask *> &task_list) {
+#ifdef USE_CXL_CUDA
+    return submitTransferTaskKernel(task_list);
+#else
+    return submitTransferTaskNormal(task_list);
+#endif
+}
+
+Status CxlTransport::submitTransferTaskKernel(
+    const std::vector<TransferTask *> &task_list) {
+    for (size_t index = 0; index < task_list.size(); ++index) {
+        assert(task_list[index]);
+        auto &task = *task_list[index];
+        assert(task.request);
+        auto &request = *task.request;
+        uint64_t dest_cxl_offset = request.target_offset;
+        task.total_bytes = request.length;
+        
+        Slice *slice = getSliceCache().allocate();
+        slice->source_addr = (char *)request.source;
+        slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
+        slice->length = request.length;
+        slice->opcode = request.opcode;
+        slice->task = &task;
+        slice->target_id = request.target_id;
+        slice->status = Slice::PENDING;
+        task.slice_list.push_back(slice);
+        __sync_fetch_and_add(&task.slice_count, 1);
+        int err;
+        if (slice->opcode == TransferRequest::READ)
+            //READ: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
+                             slice->length);
+        else
+            //WRITE: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
+                             slice->length);
+        if (err != 0)
+            slice->markFailed();
+        else
+            slice->markSuccess();
+    }
+    return Status::OK();
+}
+
+Status CxlTransport::submitTransferTaskNormal(
+    const std::vector<TransferTask *> &task_list) {
     for (size_t index = 0; index < task_list.size(); ++index) {
         assert(task_list[index]);
         auto &task = *task_list[index];

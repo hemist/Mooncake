@@ -1699,7 +1699,9 @@ DistributedObjectStore::batch_put_from_internal(
     }
 
     // Call client BatchPut and return the vector<expected> directly
-    return client_->BatchPut(keys, ordered_batched_slices, config);
+    auto put_result = client_->BatchPut(keys, ordered_batched_slices, config);
+    LOG(INFO) << "End BatchPut, keys.size = " << keys.size();
+    return put_result;
 }
 
 std::vector<tl::expected<bool, ErrorCode>>

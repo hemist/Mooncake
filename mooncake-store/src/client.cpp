@@ -418,7 +418,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         pending_transfers;
     std::vector<tl::expected<void, ErrorCode>> results(object_keys.size());
 
-    LOG(INFO) << "Parallel Submit Start";
+    LOG(INFO) << "BatchGet Parallel Submit Start";
 
     // Submit all transfers in parallel
     for (size_t i = 0; i < object_keys.size(); ++i) {
@@ -473,11 +473,89 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
         }
     }
 
-    LOG(INFO) << "Parallel Submit End";
+    LOG(INFO) << "BatchGet Parallel Submit End";
 
     VLOG(1) << "BatchGet completed for " << object_keys.size() << " keys";
     return results;
 }
+
+std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
+    const std::vector<std::string>& object_keys,
+    const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
+    std::unordered_map<std::string, std::vector<Slice>>& slices) {
+
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    if (env) {
+        std::vector<tl::expected<void, ErrorCode>> results;
+
+        // Validate input size consistency
+        if (replica_lists.size() != object_keys.size()) {
+            LOG(ERROR) << "Replica lists size (" << replica_lists.size()
+                    << ") doesn't match object keys size (" << object_keys.size()
+                    << ")";
+            results.reserve(object_keys.size());
+            for (size_t i = 0; i < object_keys.size(); ++i) {
+                results.emplace_back(tl::unexpected(ErrorCode::INVALID_PARAMS));
+            }
+            return results;
+        }
+
+        std::vector<Replica::Descriptor> transfer_replica_list;
+        std::vector<std::vector<Slice>> transfer_slices_list;
+
+        for (size_t i = 0; i < object_keys.size(); ++i) {
+            const auto& key = object_keys[i];
+            const auto& replica_list = replica_lists[i];
+
+            auto slices_it = slices.find(key);
+            if (slices_it == slices.end()) {
+                LOG(ERROR) << "Slices not found for key: " << key;
+                results[i] = tl::unexpected(ErrorCode::INVALID_PARAMS);
+                continue;
+            }
+
+            // Find the first complete replica for this key
+            Replica::Descriptor replica;
+            ErrorCode err = FindFirstCompleteReplica(replica_list, replica);
+            if (err != ErrorCode::OK || replica.storage_level != StorageLevel::CXL) {
+                if (err == ErrorCode::INVALID_REPLICA) {
+                    LOG(ERROR) << "no_complete_replicas_found key=" << key;
+                }
+                if (replica.storage_level != StorageLevel::CXL) {
+                    err = ErrorCode::INTERNAL_ERROR;
+                    LOG(ERROR) << "not a cxl replica, key=" << key;
+                }
+                results[i] = tl::unexpected(err);
+                continue;
+            }
+
+            VLOG(1) << "CXL batch get transfer, slices.size():" << (slices_it->second).size();
+            transfer_replica_list.push_back(replica);
+            transfer_slices_list.push_back(slices_it->second);
+        }
+
+        ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::READ);
+        if (result == ErrorCode::OK) 
+        {
+            VLOG(1) << "TransferDataKernel success: " << static_cast<int>(result);
+            for (size_t i = 0; i < object_keys.size(); ++i) {
+                results[i] = {};
+            }
+        }
+        else 
+        {
+            LOG(ERROR) << "TransferDataKernel failed with error: " << static_cast<int>(result);
+            for (size_t i = 0; i < object_keys.size(); ++i) {
+                results[i] = tl::unexpected(result);
+            }
+        }
+        return results;
+    }
+
+    // Fallback to normal BatchGet
+    return BatchGet(object_keys, replica_lists, slices);
+}
+
 
 tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
                                           std::vector<Slice>& slices,
@@ -656,7 +734,37 @@ void Client::StartBatchPut(std::vector<PutOperation>& ops,
     }
 }
 
-void Client::SubmitTransfers(std::vector<PutOperation>& ops) {
+void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
+                            const ReplicateConfig& config) {
+
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    if (env && config.preferred_storage_level == StorageLevel::CXL) {
+        std::vector<Replica::Descriptor> transfer_replica_list;
+        std::vector<std::vector<Slice>> transfer_slices_list;
+        for (auto& op : ops) {
+            if (op.replicas.size() != 1) {
+                LOG(ERROR) << "CXL batch transfer is not supported for multiple replicas: " << op.replicas.size();
+            }
+            else {
+                VLOG(1) << "CXL batch put transfer, op.replicas.size():" << op.replicas.size()
+                        << " op.slices.size():" << op.slices.size();
+                transfer_replica_list.push_back(op.replicas[0]);
+                transfer_slices_list.push_back(op.slices);
+            }
+        }
+
+        ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::WRITE);
+        if (result == ErrorCode::OK) 
+        {
+            VLOG(1) << "TransferDataKernel success: " << static_cast<int>(result);
+        }
+        else 
+        {
+            LOG(ERROR) << "TransferDataKernel failed with error: " << static_cast<int>(result);
+        }
+        return;
+    }
+
     CHECK(transfer_submitter_) << "TransferSubmitter not initialized";
 
     for (auto& op : ops) {
@@ -934,7 +1042,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
 
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);
-    SubmitTransfers(ops);
+    SubmitPutTransfers(ops, client_config);
     WaitForTransfers(ops);
     FinalizeBatchPut(ops);
     BatchPuttoLocalFile(ops);
@@ -1282,6 +1390,120 @@ ErrorCode Client::TransferRead(const Replica::Descriptor& replica_descriptor,
     }
 
     return TransferData(replica_descriptor, slices, TransferRequest::READ);
+}
+
+
+bool validateTransferParams(
+    const std::vector<AllocatedBuffer::Descriptor>& handles,
+    const std::vector<Slice>& slices) {
+    if (handles.empty()) {
+        LOG(ERROR) << "handles is empty";
+        return false;
+    }
+
+    if (handles.size() > slices.size()) {
+        LOG(ERROR) << "invalid_partition_count handles_size=" << handles.size()
+                   << " slices_size=" << slices.size();
+        return false;
+    }
+
+    if (handles.size() != 1) {
+        LOG(ERROR) << "replica should have only one handle, but got size " << handles.size();
+    }
+
+    for (size_t i = 0; i < handles.size(); ++i) {
+        if (handles[i].size_ != slices[i].size) {
+            LOG(ERROR) << "Size of replica partition " << i << " ("
+                       << handles[i].size_
+                       << ") does not match provided buffer (" << slices[i].size
+                       << ")";
+            return false;
+        }
+    }
+    return true;
+}
+ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& replica_list,
+                                    std::vector<std::vector<Slice>>& slices_list,
+                                    TransferRequest::OpCode op_code) { 
+    VLOG(1) << "Start CXL TransferDataKernel, replica list size: " << replica_list.size()
+            << ", slices list size: " << slices_list.size();
+
+    std::vector<AllocatedBuffer::Descriptor> batch_handles;
+    std::vector<Slice> batch_slices;
+    for (size_t i = 0; i < replica_list.size(); ++i) {
+        auto replica = replica_list[i];
+        auto slices = slices_list[i];
+        std::vector<AllocatedBuffer::Descriptor> handles;
+        auto& mem_desc = replica.get_memory_descriptor();
+        handles = mem_desc.buffer_descriptors;
+
+        if (!validateTransferParams(handles, slices)) {
+            return ErrorCode::INVALID_PARAMS;
+        }
+
+        batch_handles.push_back(handles[0]);
+        batch_slices.push_back(slices[0]);
+    }
+
+    BatchID batch_id = transfer_engine_.allocateBatchID(batch_handles.size());
+    if (batch_id == Transport::INVALID_BATCH_ID) {
+        LOG(ERROR) << "Failed to allocate batch ID for transfer";
+        return ErrorCode::TRANSFER_FAIL;
+    }
+
+    ErrorCode task_state = ErrorCode::OK;
+    try {
+        // Create transfer requests
+        std::vector<Transport::TransferRequest> requests;
+        requests.reserve(batch_handles.size());
+        bool transfer_success = true;
+
+        for (size_t i = 0; i < batch_handles.size(); ++i) {
+            const auto& handle = batch_handles[i];
+            const auto& slice = batch_slices[i];
+
+            Transport::SegmentHandle seg = transfer_engine_.openSegment(handle.segment_name_);
+            if (seg == static_cast<uint64_t>(ERR_INVALID_ARGUMENT)) {
+                LOG(ERROR) << "Failed to open segment " << handle.segment_name_;
+                task_state = ErrorCode::TRANSFER_FAIL;
+                transfer_success = false;
+                break;
+            }
+
+            Transport::TransferRequest request;
+            request.opcode = op_code;
+            request.source = static_cast<char*>(slice.ptr);
+            request.target_id = seg;
+            request.target_offset = handle.buffer_address_;
+            request.length = handle.size_;
+
+            requests.emplace_back(request);
+        }
+
+        // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
+        if (transfer_success) { 
+            // Submit transfer
+            std::string task_proto = "cxl";
+            Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto);
+            if (!s.ok()) {
+                LOG(ERROR) << "Failed to submit all transfers, error code is "
+                        << s.code();
+                // Note: batch_id will be freed by TransferEngineOperationState
+                // destructor if we create the state object, otherwise we need to free
+                // it here
+                transfer_engine_.freeBatchID(batch_id);
+                transfer_success = false;
+                task_state = ErrorCode::TRANSFER_FAIL;
+            } else {
+                VLOG(2) << "Transfer Engine task completed successfully with " 
+                        << batch_handles.size() << " handles" ;
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Exception during async fileread: " << e.what();
+    }
+
+    return task_state;
 }
 
 void Client::PingThreadFunc() {

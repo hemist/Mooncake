@@ -38,7 +38,24 @@ static constexpr int64_t DEFAULT_CLIENT_LIVE_TTL_SEC = 10;  // in seconds
 static const std::string DEFAULT_CLUSTER_ID = "mooncake_cluster";
 static const std::string DEFAULT_CXL_PATH = "/dev/dax0.0";
 static const size_t DEFAULT_CXL_BASE = 0x100000000ULL;
-static const size_t DEFAULT_CXL_SIZE = 100ULL * 1024 * 1024 * 1024;
+
+// 将 DEFAULT_CXL_SIZE 改为函数形式，从环境变量 MC_CXL_DEV_SIZE 获取值，如未设置则报错
+inline size_t get_default_cxl_size() {
+    const char* env_cxl_dev_size = std::getenv("MC_CXL_DEV_SIZE");
+    if (env_cxl_dev_size) {
+        char* end = nullptr;
+        unsigned long long val = strtoull(env_cxl_dev_size, &end, 10);
+        if (end != env_cxl_dev_size && *end == '\0') {
+            return static_cast<size_t>(val);
+        } else {
+            LOG(ERROR) << "MC_CXL_DEV_SIZE environment variable value is invalid: " << env_cxl_dev_size;
+        }
+    }
+    LOG(INFO) << "MC_CXL_DEV_SIZE environment variable is not set";
+    return (4ULL * 1024 * 1024 * 1024);
+}
+
+#define DEFAULT_CXL_SIZE (get_default_cxl_size())
 
 // Forward declarations
 class BufferAllocatorBase;
