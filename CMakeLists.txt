@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(mooncake CXX C)
 
+enable_language(CUDA)
+set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "GPU arch code" FORCE)
+
 # indicates cmake is invoked from top-level dir
 set(GLOBAL_CONFIG "true")
 

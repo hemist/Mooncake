@@ -39,6 +39,7 @@
 
 #ifdef USE_CXL_CUDA
 #include <cuda_runtime.h>
+#include "transport/cxl_transport/cxl_copy.h"
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -541,8 +542,22 @@ Status CxlTransport::submitTransferTask(
 #endif
 }
 
+#ifdef USE_CXL_CUDA
 Status CxlTransport::submitTransferTaskKernel(
     const std::vector<TransferTask *> &task_list) {
+    size_t total_slices = 0;
+    for (auto *t : task_list) total_slices += t->slice_list.size();
+
+    auto deleter = [](void *p){ ::operator delete(p); };
+    std::unique_ptr<void* [], decltype(deleter)>
+        h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    std::unique_ptr<void* [], decltype(deleter)>
+        h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    std::unique_ptr<uint64_t[], decltype(deleter)>
+        h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
+
+
+    size_t idx = 0;
     for (size_t index = 0; index < task_list.size(); ++index) {
         assert(task_list[index]);
         auto &task = *task_list[index];
@@ -561,22 +576,53 @@ Status CxlTransport::submitTransferTaskKernel(
         slice->status = Slice::PENDING;
         task.slice_list.push_back(slice);
         __sync_fetch_and_add(&task.slice_count, 1);
-        int err;
-        if (slice->opcode == TransferRequest::READ)
-            //READ: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length);
-        else
-            //WRITE: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length);
-        if (err != 0)
-            slice->markFailed();
-        else
-            slice->markSuccess();
+        // int err;
+        // if (slice->opcode == TransferRequest::READ)
+        //     //READ: Source is in local memory, Destination is on CXL
+        //     err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
+        //                      slice->length);
+        // else
+        //     //WRITE: Source is in local memory, Destination is on CXL
+        //     err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
+        //                      slice->length);
+        // if (err != 0)
+        //     slice->markFailed();
+        // else
+        //     slice->markSuccess();
+
+        for (Slice *s : task.slice_list) {
+            h_src[idx] = s->source_addr;
+            h_dst[idx] = s->cxl.dest_addr;
+            h_len[idx] = static_cast<int64_t>(s->length);
+            ++idx;
+        }
     }
+
+    const int n = h_src.size();
+    if (n == 0) {
+        return Status::OK();
+    }
+
+    launch_batch_memcpy(
+        reinterpret_cast<const void* const*>(src_ptr),
+        reinterpret_cast<void* const*>(dst_ptr),
+        reinterpret_cast<const int64_t*>(len_arr),
+        static_cast<int>(idx),
+        0, true
+    );
+
+    cudaStreamSynchronize(0);
+    for (auto *task_ptr : task_list) {
+        for (Slice *slice : task_ptr->slice_list) {
+            slice->status = Slice::SUCCESS;
+            slice->markSuccess(); 
+        }
+    }
+
     return Status::OK();
 }
+
+#endif
 
 Status CxlTransport::submitTransferTaskNormal(
     const std::vector<TransferTask *> &task_list) {
