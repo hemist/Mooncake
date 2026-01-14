@@ -735,10 +735,9 @@ void Client::StartBatchPut(std::vector<PutOperation>& ops,
 }
 
 void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
-                            const ReplicateConfig& config) {
-
-    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
-    if (env && config.preferred_storage_level == StorageLevel::CXL) {
+                            const ReplicateConfig& config,
+                            bool use_cxl_kernel) {
+    if (use_cxl_kernel) {
         std::vector<Replica::Descriptor> transfer_replica_list;
         std::vector<std::vector<Slice>> transfer_slices_list;
         for (auto& op : ops) {
@@ -754,12 +753,15 @@ void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
         }
 
         ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::WRITE);
-        if (result == ErrorCode::OK) 
-        {
-            VLOG(1) << "TransferDataKernel success: " << static_cast<int>(result);
-        }
-        else 
-        {
+        if (result == ErrorCode::OK) {
+            for (auto& op : ops) {
+                op.SetSuccess();
+            }
+            LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
+        } else {
+            for (auto& op : ops) {
+                op.SetError(result, "TransferDataKernel failed");
+            }
             LOG(ERROR) << "TransferDataKernel failed with error: " << static_cast<int>(result);
         }
         return;
@@ -860,7 +862,7 @@ void Client::WaitForTransfers(std::vector<PutOperation>& ops) {
     }
 }
 
-void Client::FinalizeBatchPut(std::vector<PutOperation>& ops) {
+void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kernel) {
     // For each operation,
     // If transfers completed successfully, we need to call BatchPutEnd
     // If the operation failed but has allocated replicas, we need to call
@@ -877,24 +879,50 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops) {
     failed_keys.reserve(ops.size());
     failed_indices.reserve(ops.size());
 
+    bool cxl_kernel_batch_dirty = false;
+
     for (size_t i = 0; i < ops.size(); ++i) {
         auto& op = ops[i];
 
-        // Check if operation completed transfers successfully and needs
-        // finalization
-        if (!op.IsResolved() && !op.replicas.empty() &&
-            !op.pending_transfers.empty()) {
-            // Transfers completed, needs BatchPutEnd
-            successful_keys.emplace_back(op.key);
-            successful_indices.emplace_back(i);
-        } else if (op.state != PutOperationState::PENDING &&
-                   !op.replicas.empty()) {
-            // Operation failed but has allocated replicas, needs BatchPutRevoke
-            failed_keys.emplace_back(op.key);
-            failed_indices.emplace_back(i);
+        if (use_cxl_kernel) {
+            if (cxl_kernel_batch_dirty) {
+                if (!successful_keys.empty()) {
+                    failed_keys.insert(failed_keys.end(), successful_keys.begin(), successful_keys.end());
+                    successful_keys.clear();
+                }
+                if (!successful_indices.empty()) {
+                    failed_indices.insert(failed_indices.end(), successful_indices.begin(), successful_indices.end());
+                    successful_indices.clear();
+                }
+            }
+            if (op.IsSuccessful() && !op.replicas.empty()) {
+                successful_keys.emplace_back(op.key);
+                successful_indices.emplace_back(i);
+            } else {
+                cxl_kernel_batch_dirty = true;
+                failed_keys.emplace_back(op.key);
+                failed_indices.emplace_back(i);
+            }
+        } else {
+            // Check if operation completed transfers successfully and needs
+            // finalization
+            if (!op.IsResolved() && !op.replicas.empty() &&
+                !op.pending_transfers.empty()) {
+                // Transfers completed, needs BatchPutEnd
+                successful_keys.emplace_back(op.key);
+                successful_indices.emplace_back(i);
+            } else if (op.state != PutOperationState::PENDING &&
+                    !op.replicas.empty()) {
+                // Operation failed but has allocated replicas, needs BatchPutRevoke
+                failed_keys.emplace_back(op.key);
+                failed_indices.emplace_back(i);
+            }
+            // Operations without replicas (early failures) don't need finalization
         }
-        // Operations without replicas (early failures) don't need finalization
     }
+
+    LOG(INFO) << "Finalizing " << successful_keys.size() << " successful puts"
+             << " and " << failed_keys.size() << " failed puts";
 
     // Process successful operations
     if (!successful_keys.empty()) {
@@ -1040,11 +1068,15 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     client_config.client_id = client_id_;
     // client_config.preferred_storage_level = StorageLevel::CXL;
 
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    bool use_cxl_cuda_kernel = env && std::string(env) == "1" && client_config.preferred_storage_level == StorageLevel::CXL;
+
     std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);
-    SubmitPutTransfers(ops, client_config);
-    WaitForTransfers(ops);
-    FinalizeBatchPut(ops);
+    SubmitPutTransfers(ops, client_config, use_cxl_cuda_kernel);
+    if (!use_cxl_cuda_kernel) 
+        WaitForTransfers(ops);
+    FinalizeBatchPut(ops, use_cxl_cuda_kernel);
     BatchPuttoLocalFile(ops);
     return CollectResults(ops);
 }
@@ -1455,7 +1487,9 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
     try {
         // Create transfer requests
         std::vector<Transport::TransferRequest> requests;
+        std::vector<Transport::TransferTask *> tasks;
         requests.reserve(batch_handles.size());
+        tasks.reserve(batch_handles.size());
         bool transfer_success = true;
 
         for (size_t i = 0; i < batch_handles.size(); ++i) {
@@ -1476,15 +1510,22 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
             request.target_id = seg;
             request.target_offset = handle.buffer_address_;
             request.length = handle.size_;
-
             requests.emplace_back(request);
+
+            auto task = std::make_unique<Transport::TransferTask>();
+            task->batch_id = batch_id;
+            task->request = &requests.back();
+            task->total_bytes = handle.size_;
+            tasks.emplace_back(task.get());
         }
 
         // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
         if (transfer_success) { 
             // Submit transfer
             std::string task_proto = "cxl";
-            Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto);
+            auto *xport = transfer_engine_.getTransport(task_proto);
+            Status s = xport->submitTransferTask(tasks);
+            // Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto);
             if (!s.ok()) {
                 LOG(ERROR) << "Failed to submit all transfers, error code is "
                         << s.code();

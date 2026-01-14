@@ -39,8 +39,8 @@ memcpy_warp(uint32_t lane_id,
 
 __device__ __forceinline__ void
 memcpy_warp_array(uint32_t lane_id, 
-                 const void** __restrict__ src_array, 
-                 void** __restrict__ dst_array, 
+                 const void* const* __restrict__ src_array, 
+                 void* const* __restrict__ dst_array, 
                  const int64_t* __restrict__ nbytes_array, 
                  int64_t n) {
     
@@ -116,8 +116,8 @@ void launch_batch_memcpy(const void* const* src_list,
                          void* const* dst_list,
                          const int64_t* len_list,
                          int n_segments,
-                         cudaStream_t stream = 0,
-                         bool enable_array = true) {
+                         cudaStream_t stream,
+                         bool enable_array) {
     /* 每个 warp 负责 1 个 segment，块内 128 线程 => 4 warps */
     constexpr int THREADS = 128;
     constexpr int WARPS_PER_BLOCK = THREADS / WARP_SIZE;

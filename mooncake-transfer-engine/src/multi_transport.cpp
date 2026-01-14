@@ -97,6 +97,7 @@ Status MultiTransport::submitTransfer(BatchID batch_id,
         auto &task = batch_desc.task_list[task_id];
         task.batch_id = batch_id;
         task.request = &request;
+        task.total_bytes = request.length;
         ++task_id;
         submit_tasks[transport].push_back(&task);
     }

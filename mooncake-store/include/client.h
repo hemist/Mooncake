@@ -283,9 +283,11 @@ class Client {
     void StartBatchPut(std::vector<PutOperation>& ops,
                        const ReplicateConfig& config);
     void SubmitPutTransfers(std::vector<PutOperation>& ops,
-                        const ReplicateConfig& config);
+                        const ReplicateConfig& config, 
+                        bool use_cxl_kernel = false);
     void WaitForTransfers(std::vector<PutOperation>& ops);
-    void FinalizeBatchPut(std::vector<PutOperation>& ops);
+    void FinalizeBatchPut(std::vector<PutOperation>& ops,
+                          bool use_cxl_kernel = false);
     void BatchPuttoLocalFile(std::vector<PutOperation>& ops);
 
     void DispatchProtocols(const std::vector<std::string> &protocols);

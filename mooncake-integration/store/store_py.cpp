@@ -1246,6 +1246,8 @@ std::vector<int> DistributedObjectStore::batch_put_from_into_cxl(
         results.push_back(to_py_ret(result));
     }
 
+    LOG(INFO) << "[batch_put_from_into_cxl] Batch writing complete";
+
     return results;
 }
 

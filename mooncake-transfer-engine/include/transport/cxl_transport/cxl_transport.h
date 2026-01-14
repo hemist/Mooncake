@@ -54,6 +54,9 @@ class CxlTransport : public Transport {
     Status submitTransferTaskKernel(
         const std::vector<TransferTask *> &task_list);
 
+    Status submitTransferTaskKernelBK(
+        const std::vector<TransferTask *> &task_list);
+
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status) override;
 
@@ -88,7 +91,7 @@ class CxlTransport : public Transport {
     int execute_copy_crc(void *dest, void *src, size_t size);
     int execute_copy_crc_slice(void *dest, void *src, size_t size);
 #endif
-    int cxlMemcpy(void *dest_addr, void *source_addr, size_t size);
+    int cxlMemcpy(void *dest_addr, void *source_addr, size_t size, bool is_read = false);
 
     bool isAddressInCxlRange(void *addr);
 

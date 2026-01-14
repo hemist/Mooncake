@@ -50,6 +50,7 @@ class Status final {
     kNuma = 300,
     kClock = 301,
     kMemory = 302,
+    kCxlKernelFail = 303,
     kNotImplemented = 999,
     kMaxCode
   };
@@ -174,6 +175,11 @@ class Status final {
     return Code::kNotSupportedTransport == code_;
   }
 
+  // Returns true iff the status indicates a CxlKernelFail error.
+  [[nodiscard]] bool IsCxlKernelFail() const {
+    return Code::kCxlKernelFail == code_;
+  }
+
   // Return a combination of the error code name and message.
   std::string ToString() const;
 
@@ -237,6 +243,9 @@ class Status final {
   }
   static Status NotSupportedTransport(std::string_view msg) {
     return Status(Code::kNotSupportedTransport, msg);
+  }
+  static Status CxlKernelFail(std::string_view msg) {
+    return Status(Code::kCxlKernelFail, msg);
   }
 
   // Return a human-readable name of the 'code'.

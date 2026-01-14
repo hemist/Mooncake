@@ -1,6 +1,9 @@
-file(GLOB CXL_SOURCES "*.cpp" "*.cu")
+file(GLOB CXL_SOURCES "*.cpp")
 
 if(USE_CXL_CUDA)
+  file(GLOB CXL_CUDA_SOURCES "*.cu")
+  list(APPEND CXL_SOURCES ${CXL_CUDA_SOURCES})
+
   add_library(cxl_transport OBJECT ${CXL_SOURCES} ${CXL_CUDA_SOURCES})
   # 为CUDA代码设置位置无关代码(PIC)支持
   set_property(TARGET cxl_transport PROPERTY POSITION_INDEPENDENT_CODE ON)

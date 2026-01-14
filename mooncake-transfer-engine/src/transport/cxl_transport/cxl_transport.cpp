@@ -33,6 +33,8 @@
 #include <unistd.h>   // For open(), close(), read(), write()
 #include <sys/mman.h> // For mmap, munmap
 
+#include <string_view>
+
 #ifdef USE_CXL_DSA
 #include <dml/dml.hpp>
 #endif
@@ -115,6 +117,7 @@ bool isCudaAddress(void* ptr) {
     #if CUDA_VERSION >= 11000
     // CUDA 11.0及以上版本
     // 检查内存类型是否为设备内存
+    LOG(INFO) << "attributes.type = " << attributes.type << " attributes.isManaged = " << attributes.isManaged;
     bool result = (attributes.type == cudaMemoryTypeDevice) && !attributes.isManaged;
     // LOG(ERROR) << "isCudaAddress: Result=" << result 
     //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
@@ -124,8 +127,8 @@ bool isCudaAddress(void* ptr) {
     // 旧版CUDA (10.x及以下)
     // 检查内存类型是否为设备内存
     bool result = (attributes.type == cudaMemoryTypeDevice);
-    // LOG(ERROR) << "isCudaAddress: Result=" << result 
-    //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
+    LOG(ERROR) << "isCudaAddress: Result=" << result 
+            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
     return result;
     #endif
 }
@@ -220,19 +223,24 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
 #endif
 
 #define CL_SIZE 64
-static inline void
-__flush_processor_cache(const void *addr, size_t len)
-{
-	int64_t i;
-	const char *buffer = (const char *)addr;
-
-	/* Flush the processor cache for the target range */
-	for (i=0; i<len; i+=CL_SIZE)
-		__builtin_ia32_clflush(&buffer[i]); 
-
+void cache_invalidate_range(const void *addr, size_t len) {
+    uintptr_t p = (uintptr_t)addr; 
+    uintptr_t end = p + len; 
+    if (p % CL_SIZE) {
+        p &= ~(uintptr_t)(CL_SIZE - 1);
+    }
+    for (; p < end; p += CL_SIZE) {
+        // __asm__ __volatile__("clflush (%0)" :: "r"((void*)p)); 
+        __asm__ __volatile__("clflushopt (%0)" :: "r"(p) : "memory");
+    }
 }
 
-int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
+void do_clflush(const void* addr, size_t len) {
+    cache_invalidate_range(addr, len);
+    _mm_sfence();
+}
+
+int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
     // Input validation
     if (!src || !dest) {
         LOG(ERROR) << "CxlTransport::cxlMemcpy invalid arguments: null pointer provided.";
@@ -248,35 +256,39 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size) {
     if (isAddressInCxlRange(dest) && isCudaAddress(src)) {
         // dest is CXL, src is VRAM, Opcode is TransferRequest::READ, VRAM->CXL
         // cudaHostRegister is finished in cxlDevInit()
-        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
-        // LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
+        LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
         CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
     } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
         // dest is VRAM, src is CXL, Opcode is TransferRequest::WRITE, CXL->VRAM
         // cudaHostRegister is finished in cxlDevInit()
-        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
-        // LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
+        LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
         CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
     } else {
-        LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM.";
+        LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM. src=" << src << ", dest=" << dest << ", size=" << size 
+                  << ", isAddressInCxlRange(dest)=" << isAddressInCxlRange(dest) << ", isCudaAddress(src)=" << isCudaAddress(src) 
+                  << ", isAddressInCxlRange(src)=" << isAddressInCxlRange(src) << ", isCudaAddress(dest)=" << isCudaAddress(dest);
     }
 #endif
     
 #ifdef USE_CXL_DSA
     execute_copy_crc(dest, src, size);
 #else
+    // if (is_read) {
+    //     LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, CXL->DRAM.";
+    //     do_clflush(src, size);
+    // }
     // Perform the memory copy
     std::memcpy(dest, src, size);
-    // Memory barriers and cache operations
-    if (isAddressInCxlRange(dest) || isAddressInCxlRange(src)) {
-        // Ensure memory ordering for CXL operations
-        __sync_synchronize();
-        __flush_processor_cache(dest, size);
-	    __sync_synchronize();
+    if (!is_read) {
+        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, DRAM->CXL.";
+        // Memory barriers and cache operations
+        do_clflush(dest, size);
     }
 #endif
     return 0; // success
@@ -546,18 +558,23 @@ Status CxlTransport::submitTransferTask(
 Status CxlTransport::submitTransferTaskKernel(
     const std::vector<TransferTask *> &task_list) {
     size_t total_slices = 0;
-    for (auto *t : task_list) total_slices += t->slice_list.size();
+    for (size_t index = 0; index < task_list.size(); ++index) {
+        auto &task = *task_list[index];
+        total_slices += task.total_bytes;
+    }
 
-    auto deleter = [](void *p){ ::operator delete(p); };
-    std::unique_ptr<void* [], decltype(deleter)>
-        h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    std::unique_ptr<void* [], decltype(deleter)>
-        h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    std::unique_ptr<uint64_t[], decltype(deleter)>
-        h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
+    LOG(INFO) << "CxlTransport::submitTransferTaskKernel total_slices=" << total_slices << ", task_list.size()=" << task_list.size();
+    // auto deleter = [](void *p){ ::operator delete(p); };
+    // std::unique_ptr<void* [], decltype(deleter)>
+    //     h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    // std::unique_ptr<void* [], decltype(deleter)>
+    //     h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    // std::unique_ptr<uint64_t[], decltype(deleter)>
+    //     h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
 
 
     size_t idx = 0;
+    bool fail = false;
     for (size_t index = 0; index < task_list.size(); ++index) {
         assert(task_list[index]);
         auto &task = *task_list[index];
@@ -566,6 +583,86 @@ Status CxlTransport::submitTransferTaskKernel(
         uint64_t dest_cxl_offset = request.target_offset;
         task.total_bytes = request.length;
         
+        // Slice *slice = getSliceCache().allocate();
+        // slice->source_addr = (char *)request.source;
+        // slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
+        // slice->length = request.length;
+        // slice->opcode = request.opcode;
+        // slice->task = &task;
+        // slice->target_id = request.target_id;
+        // slice->status = Slice::PENDING;
+        // task.slice_list.push_back(slice);
+        // __sync_fetch_and_add(&task.slice_count, 1);
+        int err;
+        if (request.opcode == TransferRequest::READ)
+            //READ: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy(request.source, cxl_base_addr + dest_cxl_offset,
+                             request.length);
+        else
+            //WRITE: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy(cxl_base_addr + dest_cxl_offset, request.source,
+                             request.length);
+        if (err != 0)
+            fail = true;
+            // __sync_fetch_and_add(task.failed_slice_count, 1);
+            // return Status::CxlKernelFail("CXL_KERNEL_FAIL");
+        // else
+            // __sync_fetch_and_add(task.transferred_bytes, request.length);
+            // __sync_fetch_and_add(task.success_slice_count, 1);
+
+
+        // for (Slice *s : task.slice_list) {
+        //     h_src[idx] = s->source_addr;
+        //     h_dst[idx] = s->cxl.dest_addr;
+        //     h_len[idx] = static_cast<int64_t>(s->length);
+        //     ++idx;
+        // }
+    }
+
+    if (fail)
+        return Status::CxlKernelFail("CXL_KERNEL_FAIL");
+    else
+        return Status::OK();
+
+    // const int n = total_slices;
+    // if (n == 0) {
+    //     return Status::OK();
+    // }
+
+    // void** h_src_ptr = h_src.get();
+    // void** h_dst_ptr = h_dst.get();
+    // uint64_t* h_len_ptr = h_len.get();
+
+    // launch_batch_memcpy(
+    //     reinterpret_cast<const void* const*>(h_src_ptr),
+    //     reinterpret_cast<void* const*>(h_dst_ptr),
+    //     reinterpret_cast<const int64_t*>(h_len_ptr),
+    //     static_cast<int>(idx),
+    //     0, 
+    //     true
+    // );
+
+    // cudaStreamSynchronize(0);
+    // for (auto *task_ptr : task_list) {
+    //     for (Slice *slice : task_ptr->slice_list) {
+    //         slice->status = Slice::SUCCESS;
+    //         slice->markSuccess(); 
+    //     }
+    // }
+
+    // return Status::OK();
+}
+
+Status CxlTransport::submitTransferTaskKernelBK(
+    const std::vector<TransferTask *> &task_list) {
+    for (size_t index = 0; index < task_list.size(); ++index) {
+        assert(task_list[index]);
+        auto &task = *task_list[index];
+        assert(task.request);
+        auto &request = *task.request;
+        uint64_t dest_cxl_offset = request.target_offset;
+        task.total_bytes = request.length;
+
         Slice *slice = getSliceCache().allocate();
         slice->source_addr = (char *)request.source;
         slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
@@ -576,49 +673,20 @@ Status CxlTransport::submitTransferTaskKernel(
         slice->status = Slice::PENDING;
         task.slice_list.push_back(slice);
         __sync_fetch_and_add(&task.slice_count, 1);
-        // int err;
-        // if (slice->opcode == TransferRequest::READ)
-        //     //READ: Source is in local memory, Destination is on CXL
-        //     err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-        //                      slice->length);
-        // else
-        //     //WRITE: Source is in local memory, Destination is on CXL
-        //     err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-        //                      slice->length);
-        // if (err != 0)
-        //     slice->markFailed();
-        // else
-        //     slice->markSuccess();
-
-        for (Slice *s : task.slice_list) {
-            h_src[idx] = s->source_addr;
-            h_dst[idx] = s->cxl.dest_addr;
-            h_len[idx] = static_cast<int64_t>(s->length);
-            ++idx;
-        }
+        int err;
+        if (slice->opcode == TransferRequest::READ)
+            //READ: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
+                             slice->length);
+        else
+            //WRITE: Source is in local memory, Destination is on CXL
+            err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
+                             slice->length);
+        if (err != 0)
+            slice->markFailed();
+        else
+            slice->markSuccess();
     }
-
-    const int n = h_src.size();
-    if (n == 0) {
-        return Status::OK();
-    }
-
-    launch_batch_memcpy(
-        reinterpret_cast<const void* const*>(src_ptr),
-        reinterpret_cast<void* const*>(dst_ptr),
-        reinterpret_cast<const int64_t*>(len_arr),
-        static_cast<int>(idx),
-        0, true
-    );
-
-    cudaStreamSynchronize(0);
-    for (auto *task_ptr : task_list) {
-        for (Slice *slice : task_ptr->slice_list) {
-            slice->status = Slice::SUCCESS;
-            slice->markSuccess(); 
-        }
-    }
-
     return Status::OK();
 }
 
@@ -644,15 +712,22 @@ Status CxlTransport::submitTransferTaskNormal(
         slice->status = Slice::PENDING;
         task.slice_list.push_back(slice);
         __sync_fetch_and_add(&task.slice_count, 1);
+
+        LOG(INFO) << "Data on cxl offset:" << dest_cxl_offset << ", length:" << slice->length << "\n";
         int err;
-        if (slice->opcode == TransferRequest::READ)
+        if (slice->opcode == TransferRequest::READ) {
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length);
-        else
+                             slice->length, true);
+
+            LOG(INFO) << "source_addr dump (" << slice->length << " bytes):";
+            fwrite(slice->source_addr, 1, slice->length, stdout);   // 原样打印
+            fflush(stdout);        // 确保立即刷到屏幕
+        } else {
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length);
+                             slice->length, false);
+        }
         if (err != 0)
             slice->markFailed();
         else
