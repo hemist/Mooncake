@@ -124,6 +124,8 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
     status.transferred_bytes = task.transferred_bytes;
     uint64_t success_slice_count = task.success_slice_count;
     uint64_t failed_slice_count = task.failed_slice_count;
+
+    LOG(INFO) << "task_id: " << task_id << " task.slice_count: " << task.slice_count << " success_slice_count: " << success_slice_count << " failed_slice_count: " << failed_slice_count;
     
     if (task.slice_count == 0) {
         return Status::NoStatus();

@@ -548,7 +548,7 @@ Status CxlTransport::submitTransfer(
 Status CxlTransport::submitTransferTask(
     const std::vector<TransferTask *> &task_list) {
 #ifdef USE_CXL_CUDA
-    return submitTransferTaskKernel(task_list);
+    return submitTransferTaskKernelBK(task_list);
 #else
     return submitTransferTaskNormal(task_list);
 #endif
@@ -564,13 +564,14 @@ Status CxlTransport::submitTransferTaskKernel(
     }
 
     LOG(INFO) << "CxlTransport::submitTransferTaskKernel total_slices=" << total_slices << ", task_list.size()=" << task_list.size();
-    // auto deleter = [](void *p){ ::operator delete(p); };
-    // std::unique_ptr<void* [], decltype(deleter)>
-    //     h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    // std::unique_ptr<void* [], decltype(deleter)>
-    //     h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    // std::unique_ptr<uint64_t[], decltype(deleter)>
-    //     h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
+
+    auto deleter = [](void *p){ ::operator delete(p); };
+    std::unique_ptr<void* [], decltype(deleter)>
+        h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    std::unique_ptr<void* [], decltype(deleter)>
+        h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
+    std::unique_ptr<uint64_t[], decltype(deleter)>
+        h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
 
 
     size_t idx = 0;
@@ -582,76 +583,68 @@ Status CxlTransport::submitTransferTaskKernel(
         auto &request = *task.request;
         uint64_t dest_cxl_offset = request.target_offset;
         task.total_bytes = request.length;
-        
-        // Slice *slice = getSliceCache().allocate();
-        // slice->source_addr = (char *)request.source;
-        // slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
-        // slice->length = request.length;
-        // slice->opcode = request.opcode;
-        // slice->task = &task;
-        // slice->target_id = request.target_id;
-        // slice->status = Slice::PENDING;
-        // task.slice_list.push_back(slice);
-        // __sync_fetch_and_add(&task.slice_count, 1);
-        int err;
-        if (request.opcode == TransferRequest::READ)
-            //READ: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy(request.source, cxl_base_addr + dest_cxl_offset,
-                             request.length);
-        else
-            //WRITE: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy(cxl_base_addr + dest_cxl_offset, request.source,
-                             request.length);
-        if (err != 0)
-            fail = true;
-            // __sync_fetch_and_add(task.failed_slice_count, 1);
-            // return Status::CxlKernelFail("CXL_KERNEL_FAIL");
-        // else
-            // __sync_fetch_and_add(task.transferred_bytes, request.length);
-            // __sync_fetch_and_add(task.success_slice_count, 1);
 
-
-        // for (Slice *s : task.slice_list) {
-        //     h_src[idx] = s->source_addr;
-        //     h_dst[idx] = s->cxl.dest_addr;
-        //     h_len[idx] = static_cast<int64_t>(s->length);
-        //     ++idx;
-        // }
+        h_src[index] = request.source;
+        h_dst[index] = cxl_base_addr + dest_cxl_offset;
+        h_len[index] = request.length;
     }
 
-    if (fail)
-        return Status::CxlKernelFail("CXL_KERNEL_FAIL");
-    else
-        return Status::OK();
+    void** h_src_ptr = h_src.get();
+    void** h_dst_ptr = h_dst.get();
+    uint64_t* h_len_ptr = h_len.get();
 
-    // const int n = total_slices;
-    // if (n == 0) {
-    //     return Status::OK();
-    // }
+    launch_batch_memcpy(
+        reinterpret_cast<const void* const*>(h_src_ptr),
+        reinterpret_cast<void* const*>(h_dst_ptr),
+        reinterpret_cast<const int64_t*>(h_len_ptr),
+        static_cast<int>(idx),
+        0, 
+        // true
+        false
+    );
 
-    // void** h_src_ptr = h_src.get();
-    // void** h_dst_ptr = h_dst.get();
-    // uint64_t* h_len_ptr = h_len.get();
+    LOG(INFO) << "CxlTransport::submitTransferTaskKernel done";
 
-    // launch_batch_memcpy(
-    //     reinterpret_cast<const void* const*>(h_src_ptr),
-    //     reinterpret_cast<void* const*>(h_dst_ptr),
-    //     reinterpret_cast<const int64_t*>(h_len_ptr),
-    //     static_cast<int>(idx),
-    //     0, 
-    //     true
-    // );
-
-    // cudaStreamSynchronize(0);
-    // for (auto *task_ptr : task_list) {
-    //     for (Slice *slice : task_ptr->slice_list) {
-    //         slice->status = Slice::SUCCESS;
-    //         slice->markSuccess(); 
-    //     }
-    // }
-
-    // return Status::OK();
+    cudaStreamSynchronize(0);
+    return Status::OK();
 }
+
+// Status CxlTransport::submitTransferTaskKernelBK(
+//     const std::vector<TransferTask *> &task_list) {
+//     for (size_t index = 0; index < task_list.size(); ++index) {
+//         assert(task_list[index]);
+//         auto &task = *task_list[index];
+//         assert(task.request);
+//         auto &request = *task.request;
+//         uint64_t dest_cxl_offset = request.target_offset;
+//         task.total_bytes = request.length;
+
+//         Slice *slice = getSliceCache().allocate();
+//         slice->source_addr = (char *)request.source;
+//         slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
+//         slice->length = request.length;
+//         slice->opcode = request.opcode;
+//         slice->task = &task;
+//         slice->target_id = request.target_id;
+//         slice->status = Slice::PENDING;
+//         task.slice_list.push_back(slice);
+//         __sync_fetch_and_add(&task.slice_count, 1);
+//         int err;
+//         if (slice->opcode == TransferRequest::READ)
+//             //READ: Source is in local memory, Destination is on CXL
+//             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
+//                              slice->length);
+//         else
+//             //WRITE: Source is in local memory, Destination is on CXL
+//             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
+//                              slice->length);
+//         if (err != 0)
+//             slice->markFailed();
+//         else
+//             slice->markSuccess();
+//     }
+//     return Status::OK();
+// }
 
 Status CxlTransport::submitTransferTaskKernelBK(
     const std::vector<TransferTask *> &task_list) {
@@ -663,29 +656,15 @@ Status CxlTransport::submitTransferTaskKernelBK(
         uint64_t dest_cxl_offset = request.target_offset;
         task.total_bytes = request.length;
 
-        Slice *slice = getSliceCache().allocate();
-        slice->source_addr = (char *)request.source;
-        slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
-        slice->length = request.length;
-        slice->opcode = request.opcode;
-        slice->task = &task;
-        slice->target_id = request.target_id;
-        slice->status = Slice::PENDING;
-        task.slice_list.push_back(slice);
-        __sync_fetch_and_add(&task.slice_count, 1);
         int err;
-        if (slice->opcode == TransferRequest::READ)
+        if (request.opcode == TransferRequest::READ)
             //READ: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length);
+            err = cxlMemcpy((char *)request.source, (char *)cxl_base_addr + dest_cxl_offset,
+                             request.length);
         else
             //WRITE: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length);
-        if (err != 0)
-            slice->markFailed();
-        else
-            slice->markSuccess();
+            err = cxlMemcpy((char *)cxl_base_addr + dest_cxl_offset, (char *)request.source,
+                             request.length);
     }
     return Status::OK();
 }
@@ -719,10 +698,6 @@ Status CxlTransport::submitTransferTaskNormal(
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
                              slice->length, true);
-
-            LOG(INFO) << "source_addr dump (" << slice->length << " bytes):";
-            fwrite(slice->source_addr, 1, slice->length, stdout);   // 原样打印
-            fflush(stdout);        // 确保立即刷到屏幕
         } else {
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,

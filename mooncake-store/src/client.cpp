@@ -535,16 +535,13 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
         }
 
         ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::READ);
-        if (result == ErrorCode::OK) 
-        {
-            VLOG(1) << "TransferDataKernel success: " << static_cast<int>(result);
-            for (size_t i = 0; i < object_keys.size(); ++i) {
-                results[i] = {};
-            }
-        }
-        else 
-        {
-            LOG(ERROR) << "TransferDataKernel failed with error: " << static_cast<int>(result);
+        if (result == ErrorCode::OK) {
+            LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
+            // for (size_t i = 0; i < object_keys.size(); ++i) {
+            //     results[i] = tl::unexpected(result);
+            // }
+        } else {
+            LOG(INFO) << "TransferDataKernel failed with error: " << static_cast<int>(result);
             for (size_t i = 0; i < object_keys.size(); ++i) {
                 results[i] = tl::unexpected(result);
             }

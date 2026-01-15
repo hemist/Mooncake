@@ -1530,7 +1530,7 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
 
     std::vector<ValidKeyInfo> valid_operations;
     valid_operations.reserve(num_keys);  
-
+    
     for (size_t i = 0; i < num_keys; ++i) {
         const auto &key = keys[i];
 
@@ -1632,18 +1632,21 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     }
   
     const auto batch_get_results =
-        client_->BatchGet(batch_keys, batch_replica_lists, batch_slices);
+        client_->BatchGetCxl(batch_keys, batch_replica_lists, batch_slices);
 
-    for (size_t j = 0; j < batch_get_results.size(); ++j) {
-        const auto &op = valid_operations[j];  
+    
 
-        if (!batch_get_results[j]) {
-            const auto error = batch_get_results[j].error();
-            LOG(ERROR) << "BatchGet from CXL segment failed for key '" << op.key
-                       << "': " << toString(error);
-            results[op.original_index] = tl::unexpected(error);
-        }
-    }
+    // for (size_t j = 0; j < batch_get_results.size(); ++j) {
+        // const auto &op = valid_operations[j];  
+
+        // if (!batch_get_results[j]) {
+        //     const auto error = batch_get_results[j].error();
+        //     LOG(ERROR) << "BatchGet from CXL segment failed for key '" << op.key
+        //                << "': " << toString(error);
+        //     results[op.original_index] = tl::unexpected(error);
+        // }
+        // LOG(INFO) << "BatchPut from CXL segment completed:" << j;
+    // }
 
     return results;
 }
