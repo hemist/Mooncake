@@ -1270,7 +1270,7 @@ std::vector<int> DistributedObjectStore::batch_get_into_from_cxl(
     const std::vector<std::string> &keys,       
     const std::vector<void *> &buffers,        
     const std::vector<size_t> &sizes) {        
-
+    LOG(INFO) << "[GET-start] batch_get_into_from_cxl start";
     auto internal_results = batch_get_into_from_cxl_internal(keys, buffers, sizes);
     
     std::vector<int> results;
@@ -1280,7 +1280,7 @@ std::vector<int> DistributedObjectStore::batch_get_into_from_cxl(
     for (const auto &result : internal_results) {
         results.push_back(to_py_ret(result));
     }
-
+    LOG(INFO) << "[GET-end] batch_get_into_from_cxl end";
     return results;
 }
 
@@ -1513,6 +1513,8 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     const size_t num_keys = keys.size();
     std::vector<tl::expected<int64_t, ErrorCode>> results;
     results.reserve(num_keys);  
+
+    
 
     if (num_keys == 0) {
         return results;

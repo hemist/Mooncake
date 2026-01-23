@@ -77,7 +77,14 @@ Status MultiTransport::freeBatchID(BatchID batch_id) {
 
 Status MultiTransport::submitTransfer(BatchID batch_id, 
                                       const std::vector<TransferRequest> &entries,
-                                      std::string &proto) {
+                                      std::string &proto,
+                                      bool use_kernel) {    
+    if (use_kernel) {
+        Transport *transport = getTransport(proto);
+        auto* cxl_transport = dynamic_cast<CxlTransport*>(transport);
+        return cxl_transport->submitTransferDirectKernel(entries);
+    }
+    
     auto &batch_desc = *((BatchDesc *)(batch_id));
     if (batch_desc.task_list.size() + entries.size() > batch_desc.batch_size) {
         return Status::TooManyRequests(
@@ -125,8 +132,6 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
     uint64_t success_slice_count = task.success_slice_count;
     uint64_t failed_slice_count = task.failed_slice_count;
 
-    LOG(INFO) << "task_id: " << task_id << " task.slice_count: " << task.slice_count << " success_slice_count: " << success_slice_count << " failed_slice_count: " << failed_slice_count;
-    
     if (task.slice_count == 0) {
         return Status::NoStatus();
     }

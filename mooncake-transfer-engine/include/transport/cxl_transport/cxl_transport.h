@@ -54,8 +54,7 @@ class CxlTransport : public Transport {
     Status submitTransferTaskKernel(
         const std::vector<TransferTask *> &task_list);
 
-    Status submitTransferTaskKernelBK(
-        const std::vector<TransferTask *> &task_list);
+    Status submitTransferDirectKernel(const std::vector<TransferRequest> &entries);
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status) override;

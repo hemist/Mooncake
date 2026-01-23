@@ -40,7 +40,8 @@ class MultiTransport {
 
     Status submitTransfer(BatchID batch_id,
                           const std::vector<TransferRequest> &entries,
-                          std::string &proto);
+                          std::string &proto,
+                          bool use_kernel = false);
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status);

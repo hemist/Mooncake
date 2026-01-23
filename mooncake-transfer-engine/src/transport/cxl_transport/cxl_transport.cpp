@@ -69,68 +69,18 @@ bool isCudaAddress(void* ptr) {
 
     cudaPointerAttributes attributes;
     cudaError_t error = cudaPointerGetAttributes(&attributes, ptr);
+    if (error != cudaSuccess) {
+        std::cout << "ERROR: cudaPointerGetAttributes failed: " << cudaGetErrorString(error) << std::endl;
+        return false;
+    }
 
-    // std::cout << "=== CUDA Memory Check Results ===" << std::endl;
-    // std::cout << "Pointer: " << ptr << " (0x" << std::hex << ptr << std::dec << ")" << std::endl;
-
-    // if (error == cudaSuccess) {
-    //     switch (attributes.type) {
-    //         case cudaMemoryTypeDevice:
-    //             std::cout << "Memory type: Device memory" << std::endl;
-    //             std::cout << "Device: " << attributes.device << std::endl;
-    //             std::cout << "Device pointer: " << attributes.devicePointer << std::endl;
-    //             break;
-    //         case cudaMemoryTypeHost:
-    //             std::cout << "Memory type: Host memory" << std::endl;
-    //             std::cout << "Host pointer: " << attributes.hostPointer << std::endl;
-    //             break;
-    //         case cudaMemoryTypeUnregistered:
-    //             std::cout << "Memory type: Unregistered memory (likely unified memory)" << std::endl;
-    //             // 检查是否支持统一内存
-    //             cudaDeviceProp prop;
-    //             cudaGetDeviceProperties(&prop, 0);
-    //             if (prop.unifiedAddressing) {
-    //                 std::cout << "Unified addressing is supported" << std::endl;
-    //             }
-    //             break;
-    //         case cudaMemoryTypeManaged:
-    //             std::cout << "Memory type: Managed memory (UVA)" << std::endl;
-    //             break;
-    //         default:
-    //             std::cout << "Memory type: Unknown" << std::endl;
-    //             break;
-    //     }
-        
-    //     std::cout << "Detailed attributes:" << std::endl;
-    //     std::cout << "  type: " << attributes.type << std::endl;
-    //     std::cout << "  device: " << attributes.device << std::endl;
-    //     std::cout << "  devicePointer: " << attributes.devicePointer << std::endl;
-    //     std::cout << "  hostPointer: " << attributes.hostPointer << std::endl;
-        
-    // } else {
-    //     std::cout << "ERROR: cudaPointerGetAttributes failed: " << cudaGetErrorString(error) << std::endl;
-    //     std::cout << "Error code: " << error << std::endl;
-    // }
-    // std::cout << "=================================" << std::endl;
-    
-    // 根据CUDA版本使用适当的判断方法
-    #if CUDA_VERSION >= 11000
-    // CUDA 11.0及以上版本
-    // 检查内存类型是否为设备内存
-    LOG(INFO) << "attributes.type = " << attributes.type << " attributes.isManaged = " << attributes.isManaged;
-    bool result = (attributes.type == cudaMemoryTypeDevice) && !attributes.isManaged;
-    // LOG(ERROR) << "isCudaAddress: Result=" << result 
-    //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
-    //         << " (isManaged)=" << attributes.isManaged;
-    return result;
-    #else
-    // 旧版CUDA (10.x及以下)
     // 检查内存类型是否为设备内存
     bool result = (attributes.type == cudaMemoryTypeDevice);
-    LOG(ERROR) << "isCudaAddress: Result=" << result 
-            << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice);
+    // LOG(ERROR) << "ptc = " << ptr
+    //         << ", isCudaAddress: Result=" << result 
+    //         << " (type == cudaMemoryTypeDevice)=" << (attributes.type == cudaMemoryTypeDevice)
+    //         << " , type=" << attributes.type;
     return result;
-    #endif
 }
 
 #endif
@@ -182,28 +132,6 @@ int CxlTransport::execute_copy_crc(void *dest, void *src, size_t size) {
     if (size < 1) {
         return -2;
     }
-    // Run operation
-    // auto handler = dml::submit<dml::software>(dml::copy_crc,
-    //                                             dml::make_view(c_src, size),
-    //                                             dml::make_view(c_dst, size),
-    //                                             crc_seed);
-    // // Wait for the result
-    // int i = 0;
-    // do {
-    //     auto result = handler.get();
-    //     if (result.status == dml::status_code::ok)
-    //     {
-    //         //LOG(ERROR) << "DSA copy ok:"<< ++i << std::endl;
-    //         return 0;
-    //     } else if (result.status == dml::status_code::partial_completion) {
-    //         LOG(ERROR) << "DSA copy partial_completion:"<< ++i << std::endl;
-    //         continue;
-    //     } else {
-    //         LOG(ERROR) << "DSA copy failed：" << static_cast<int>(result.status) << std::endl;
-    //         return -1;
-    //     }
-    // } while(true);
-    // return -1;
 
     auto result = dml::execute<dml::hardware>(dml::copy_crc, dml::make_view(c_src, size),
                     dml::make_view(c_dst, size), crc_seed);
@@ -255,17 +183,17 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
 #ifdef USE_CXL_CUDA
     if (isAddressInCxlRange(dest) && isCudaAddress(src)) {
         // dest is CXL, src is VRAM, Opcode is TransferRequest::READ, VRAM->CXL
-        // cudaHostRegister is finished in cxlDevInit()
-        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
-        LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        // // cudaHostRegister is finished in cxlDevInit()
+        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
+        // LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
         CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
     } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
         // dest is VRAM, src is CXL, Opcode is TransferRequest::WRITE, CXL->VRAM
         // cudaHostRegister is finished in cxlDevInit()
-        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
-        LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
+        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
+        // LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
         CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
@@ -548,105 +476,64 @@ Status CxlTransport::submitTransfer(
 Status CxlTransport::submitTransferTask(
     const std::vector<TransferTask *> &task_list) {
 #ifdef USE_CXL_CUDA
-    return submitTransferTaskKernelBK(task_list);
+    return submitTransferTaskKernel(task_list);
 #else
     return submitTransferTaskNormal(task_list);
 #endif
 }
 
 #ifdef USE_CXL_CUDA
-Status CxlTransport::submitTransferTaskKernel(
-    const std::vector<TransferTask *> &task_list) {
-    size_t total_slices = 0;
-    for (size_t index = 0; index < task_list.size(); ++index) {
-        auto &task = *task_list[index];
-        total_slices += task.total_bytes;
-    }
 
-    LOG(INFO) << "CxlTransport::submitTransferTaskKernel total_slices=" << total_slices << ", task_list.size()=" << task_list.size();
+Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferRequest> &entries) {
+    int n = entries.size();
+    void*  h_src[n] = {nullptr};
+    void*  h_dst[n] = {nullptr};
+    int64_t  data_len = 0;
+    void** d_src_list_gpu = nullptr;
+    void** d_dst_list_gpu = nullptr;
 
-    auto deleter = [](void *p){ ::operator delete(p); };
-    std::unique_ptr<void* [], decltype(deleter)>
-        h_src(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    std::unique_ptr<void* [], decltype(deleter)>
-        h_dst(static_cast<void**>(::operator new(total_slices * sizeof(void*))), deleter);
-    std::unique_ptr<uint64_t[], decltype(deleter)>
-        h_len(static_cast<uint64_t*>(::operator new(total_slices * sizeof(uint64_t))), deleter);
-
-
-    size_t idx = 0;
-    bool fail = false;
-    for (size_t index = 0; index < task_list.size(); ++index) {
-        assert(task_list[index]);
-        auto &task = *task_list[index];
-        assert(task.request);
-        auto &request = *task.request;
+    int idx = 0;
+    bool write_opt = false;
+    for (auto &request : entries) { 
         uint64_t dest_cxl_offset = request.target_offset;
-        task.total_bytes = request.length;
+        write_opt = request.opcode == TransferRequest::WRITE;
 
-        h_src[index] = request.source;
-        h_dst[index] = cxl_base_addr + dest_cxl_offset;
-        h_len[index] = request.length;
+        h_src[idx] = request.source;
+        h_dst[idx] = (void*) ((uintptr_t)cxl_base_addr + dest_cxl_offset);
+        if (data_len == 0) {
+            data_len = request.length;
+        }
+        idx++;
     }
 
-    void** h_src_ptr = h_src.get();
-    void** h_dst_ptr = h_dst.get();
-    uint64_t* h_len_ptr = h_len.get();
+    CUDA_CHECK(cudaMalloc(&d_src_list_gpu, n * sizeof(void*)));
+    CUDA_CHECK(cudaMalloc(&d_dst_list_gpu, n * sizeof(void*)));
 
-    launch_batch_memcpy(
-        reinterpret_cast<const void* const*>(h_src_ptr),
-        reinterpret_cast<void* const*>(h_dst_ptr),
-        reinterpret_cast<const int64_t*>(h_len_ptr),
-        static_cast<int>(idx),
-        0, 
-        // true
-        false
-    );
+    CUDA_CHECK(cudaMemcpy(d_src_list_gpu, h_src, n * sizeof(void*), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_dst_list_gpu, h_dst, n * sizeof(void*), cudaMemcpyHostToDevice));
 
-    LOG(INFO) << "CxlTransport::submitTransferTaskKernel done";
+    if (write_opt) {
+        // LOG(INFO) << "CxlTransport::submitTransferTaskKernel WRITE";
+        launch_batch_memcpy(
+            (const void* const*)(d_src_list_gpu),
+            (void* const*)(d_dst_list_gpu),
+            data_len, idx, 0
+        );
+    } else {
+        // LOG(INFO) << "CxlTransport::submitTransferTaskKernel READ";
+        launch_batch_memcpy(
+            (const void* const*)(d_dst_list_gpu),
+            (void* const*)(d_src_list_gpu),
+            data_len, idx, 0
+        );
+    }
 
-    cudaStreamSynchronize(0);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    // LOG(INFO) << "CxlTransport::submitTransfer-Direct-Kernel done";
     return Status::OK();
 }
 
-// Status CxlTransport::submitTransferTaskKernelBK(
-//     const std::vector<TransferTask *> &task_list) {
-//     for (size_t index = 0; index < task_list.size(); ++index) {
-//         assert(task_list[index]);
-//         auto &task = *task_list[index];
-//         assert(task.request);
-//         auto &request = *task.request;
-//         uint64_t dest_cxl_offset = request.target_offset;
-//         task.total_bytes = request.length;
-
-//         Slice *slice = getSliceCache().allocate();
-//         slice->source_addr = (char *)request.source;
-//         slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
-//         slice->length = request.length;
-//         slice->opcode = request.opcode;
-//         slice->task = &task;
-//         slice->target_id = request.target_id;
-//         slice->status = Slice::PENDING;
-//         task.slice_list.push_back(slice);
-//         __sync_fetch_and_add(&task.slice_count, 1);
-//         int err;
-//         if (slice->opcode == TransferRequest::READ)
-//             //READ: Source is in local memory, Destination is on CXL
-//             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-//                              slice->length);
-//         else
-//             //WRITE: Source is in local memory, Destination is on CXL
-//             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-//                              slice->length);
-//         if (err != 0)
-//             slice->markFailed();
-//         else
-//             slice->markSuccess();
-//     }
-//     return Status::OK();
-// }
-
-Status CxlTransport::submitTransferTaskKernelBK(
+Status CxlTransport::submitTransferTaskKernel(
     const std::vector<TransferTask *> &task_list) {
     for (size_t index = 0; index < task_list.size(); ++index) {
         assert(task_list[index]);
@@ -656,16 +543,32 @@ Status CxlTransport::submitTransferTaskKernelBK(
         uint64_t dest_cxl_offset = request.target_offset;
         task.total_bytes = request.length;
 
+        Slice *slice = getSliceCache().allocate();
+        slice->source_addr = (char *)request.source;
+        slice->cxl.dest_addr = (char *)cxl_base_addr + dest_cxl_offset;
+        slice->length = request.length;
+        slice->opcode = request.opcode;
+        slice->task = &task;
+        slice->target_id = request.target_id;
+        slice->status = Slice::PENDING;
+        task.slice_list.push_back(slice);
+        __sync_fetch_and_add(&task.slice_count, 1);
         int err;
-        if (request.opcode == TransferRequest::READ)
+        if (slice->opcode == TransferRequest::READ)
             //READ: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy((char *)request.source, (char *)cxl_base_addr + dest_cxl_offset,
-                             request.length);
+            err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
+                             slice->length);
         else
             //WRITE: Source is in local memory, Destination is on CXL
-            err = cxlMemcpy((char *)cxl_base_addr + dest_cxl_offset, (char *)request.source,
-                             request.length);
+            err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
+                             slice->length);
+        if (err != 0)
+            slice->markFailed();
+        else
+            slice->markSuccess();
     }
+
+    // LOG(INFO) << "CxlTransport::submitTransfer-Normal-Task done";
     return Status::OK();
 }
 

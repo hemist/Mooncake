@@ -143,8 +143,9 @@ class TransferEngine {
 
     Status submitTransfer(BatchID batch_id,
                           const std::vector<TransferRequest> &entries,
-                          std::string &proto) {
-        return multi_transports_->submitTransfer(batch_id, entries, proto);
+                          std::string &proto,
+                          bool use_kernel = false) {
+        return multi_transports_->submitTransfer(batch_id, entries, proto, use_kernel);
     }
 
     Status submitTransferWithNotify(BatchID batch_id,

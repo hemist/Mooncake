@@ -1511,18 +1511,15 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
 
             auto task = std::make_unique<Transport::TransferTask>();
             task->batch_id = batch_id;
-            task->request = &requests.back();
+            task->request = &request;
             task->total_bytes = handle.size_;
             tasks.emplace_back(task.get());
         }
 
-        // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
         if (transfer_success) { 
             // Submit transfer
             std::string task_proto = "cxl";
-            auto *xport = transfer_engine_.getTransport(task_proto);
-            Status s = xport->submitTransferTask(tasks);
-            // Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto);
+            Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto, true);
             if (!s.ok()) {
                 LOG(ERROR) << "Failed to submit all transfers, error code is "
                         << s.code();
