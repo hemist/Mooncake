@@ -553,6 +553,33 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
     return BatchGet(object_keys, replica_lists, slices);
 }
 
+tl::expected<void, ErrorCode> Client::BatchGetWarp(
+    const std::vector<std::string>& object_keys,
+    const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
+    std::unordered_map<std::string, std::vector<Slice>>& slices,
+    bool use_cuda_kernel) {
+    
+    tl::expected<void, ErrorCode> results;
+    if (use_cuda_kernel) {
+        auto res_list = BatchGetCxl(object_keys, replica_lists, slices);
+        for (auto& res : res_list) {
+            if (!res) {
+                results = res;
+                break;
+            }
+        }
+    } else {
+        auto res_list = BatchGet(object_keys, replica_lists, slices);
+        for (auto& res : res_list) {
+            if (!res) {
+                results = res;
+                break;
+            }
+        }
+    }
+    return results;
+}
+
 
 tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
                                           std::vector<Slice>& slices,
@@ -626,6 +653,8 @@ class PutOperation {
         result = tl::unexpected(ErrorCode::INTERNAL_ERROR);
     }
 
+    virtual ~PutOperation() = default;
+
     std::string key;
     std::vector<Slice> slices;
     size_t value_length;
@@ -672,109 +701,186 @@ class PutOperation {
     }
 };
 
-std::vector<PutOperation> Client::CreatePutOperations(
+class WarpPutOperation : public PutOperation {
+   public:
+    WarpPutOperation(const std::vector<std::string> k, const std::vector<Slice>& s)
+        : PutOperation(k.empty() ? "-warp" : k[0] + "-warp", s),
+          keys(std::move(k)) {
+        kv_size = s.empty() ? 0 : s[0].size;
+    }
+
+    std::vector<std::string> keys;
+    size_t kv_size;
+};
+
+std::vector<std::unique_ptr<PutOperation>> Client::CreatePutOperations(
     const std::vector<ObjectKey>& keys,
     const std::vector<std::vector<Slice>>& batched_slices) {
-    std::vector<PutOperation> ops;
+    std::vector<std::unique_ptr<PutOperation>> ops;
     ops.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
-        ops.emplace_back(keys[i], batched_slices[i]);
+        ops.emplace_back(std::make_unique<PutOperation>(keys[i], batched_slices[i]));
     }
     return ops;
 }
 
-void Client::StartBatchPut(std::vector<PutOperation>& ops,
+void Client::StartBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
                            const ReplicateConfig& config) {
+    bool use_warp = config.use_warp;
     std::vector<std::string> keys;
     std::vector<std::vector<uint64_t>> slice_lengths;
+    size_t key_cnt = ops.size();
 
-    keys.reserve(ops.size());
-    slice_lengths.reserve(ops.size());
+    if (use_warp) {
+        auto* op = dynamic_cast<WarpPutOperation*>(ops[0].get());
+        key_cnt = op->keys.size();
+        size_t slices_per_key = op->slices.size() / key_cnt;
+        keys.reserve(key_cnt);
+        slice_lengths.reserve(key_cnt);
 
-    for (const auto& op : ops) {
-        keys.emplace_back(op.key);
-
-        std::vector<uint64_t> slice_sizes;
-        slice_sizes.reserve(op.slices.size());
-        for (const auto& slice : op.slices) {
-            slice_sizes.emplace_back(slice.size);
+        keys = op->keys;
+        for (size_t i = 0; i < key_cnt; ++i) {
+            std::vector<uint64_t> slice_sizes;
+            slice_sizes.reserve(slices_per_key);
+            for (size_t j = 0; j < slices_per_key; ++j) {
+                slice_sizes.emplace_back(op->kv_size);
+            }
+            slice_lengths.emplace_back(std::move(slice_sizes));
         }
-        slice_lengths.emplace_back(std::move(slice_sizes));
+    } else {
+        keys.reserve(ops.size());
+        slice_lengths.reserve(ops.size());
+        for (const auto& op : ops) {
+            keys.emplace_back(op->key);
+
+            std::vector<uint64_t> slice_sizes;
+            slice_sizes.reserve(op->slices.size());
+            for (const auto& slice : op->slices) {
+                slice_sizes.emplace_back(slice.size);
+            }
+            slice_lengths.emplace_back(std::move(slice_sizes));
+        }
     }
 
     auto start_responses =
         master_client_.BatchPutStart(keys, slice_lengths, config);
 
     // Ensure response size matches request size
-    if (start_responses.size() != ops.size()) {
+    if (start_responses.size() != key_cnt) {
         LOG(ERROR) << "BatchPutStart response size mismatch: expected "
                    << ops.size() << ", got " << start_responses.size();
         for (auto& op : ops) {
-            op.SetError(ErrorCode::RPC_FAIL,
+            op->SetError(ErrorCode::RPC_FAIL,
                         "BatchPutStart response size mismatch");
         }
         return;
     }
 
     // Process individual responses with robust error handling
-    for (size_t i = 0; i < ops.size(); ++i) {
-        if (!start_responses[i]) {
-            ops[i].SetError(start_responses[i].error(),
-                            "Master failed to start put operation");
-        } else {
-            ops[i].replicas = start_responses[i].value();
-            // Operation continues to next stage - result remains INTERNAL_ERROR
-            // until fully successful
-            VLOG(1) << "Successfully started put for key " << ops[i].key
-                    << " with " << ops[i].replicas.size() << " replicas";
+    if (use_warp) {
+        for (size_t i = 0; i < key_cnt; ++i) {
+            if (!start_responses[i]) {
+                ops[0]->SetError(start_responses[i].error(), "Master failed to start put operation");
+                return;
+            } else {
+                ops[0]->replicas.insert(ops[0]->replicas.end(),
+                                    start_responses[i].value().begin(),
+                                    start_responses[i].value().end());
+            }
         }
-    }
+    } else {
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!start_responses[i]) {
+                ops[i]->SetError(start_responses[i].error(), "Master failed to start put operation");
+            } else {
+                ops[i]->replicas = start_responses[i].value();
+                // Operation continues to next stage - result remains INTERNAL_ERROR
+                // until fully successful
+                LOG(INFO) << "Successfully started put for key " << ops[i]->key
+                        << " with " << ops[i]->replicas.size() << " replicas";
+            }
+        }
+    }    
 }
 
-void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
+void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
                             const ReplicateConfig& config,
                             bool use_cxl_kernel) {
+    bool use_warp = config.use_warp;
     if (use_cxl_kernel) {
         std::vector<Replica::Descriptor> transfer_replica_list;
         std::vector<std::vector<Slice>> transfer_slices_list;
         for (auto& op : ops) {
-            if (op.replicas.size() != 1) {
-                LOG(ERROR) << "CXL batch transfer is not supported for multiple replicas: " << op.replicas.size();
-            }
-            else {
-                VLOG(1) << "CXL batch put transfer, op.replicas.size():" << op.replicas.size()
-                        << " op.slices.size():" << op.slices.size();
-                transfer_replica_list.push_back(op.replicas[0]);
-                transfer_slices_list.push_back(op.slices);
+            if (use_warp) {
+                auto* warp_op = dynamic_cast<WarpPutOperation*>(op.get());
+                // We only get one op, and several replicas in it.
+                // For each replica, we get several slices.
+                if (warp_op->replicas.size() != warp_op->keys.size()) {
+                    LOG(ERROR) << "WarpPutOperation: replica size mismatch: "
+                               << warp_op->replicas.size() << " vs "
+                               << warp_op->keys.size();
+                    warp_op->SetError(ErrorCode::INVALID_PARAMS, "WarpPutOperation: replica size mismatch");
+                    return;
+                }
+
+                // for (auto& s : warp_op->slices) {
+                //     LOG(INFO) << "WarpPutOperation: slice size: " << s.size;
+                // }
+
+                transfer_replica_list.insert(transfer_replica_list.end(), warp_op->replicas.begin(), warp_op->replicas.end());
+                for (size_t i = 0; i < warp_op->replicas.size(); ++i) {
+                    std::vector<Slice> slices;
+                    size_t slices_per_replica = warp_op->slices.size() / warp_op->replicas.size();
+                    for (size_t j = 0; j < slices_per_replica; ++j) {
+                        slices.emplace_back(warp_op->slices[i * slices_per_replica + j]);
+                    }
+                    transfer_slices_list.emplace_back(std::move(slices));
+                }
+            } else {
+                // For normal case, we only get one replica, and one slice (or several slices) for each.
+                if (op->replicas.size() != 1) {
+                    LOG(ERROR) << "CXL batch transfer is not supported for multiple replicas: " << op->replicas.size();
+                    op->SetError(ErrorCode::INVALID_PARAMS, "CXL batch transfer is not supported for multiple replicas");
+                    return;
+                }
+                transfer_replica_list.push_back(op->replicas[0]);
+                transfer_slices_list.push_back(op->slices);
             }
         }
+
+        // LOG(INFO) << "--------------------------------";
+        // for (auto& slices : transfer_slices_list) {
+        //     for (auto& slice : slices) {
+        //         LOG(INFO) << "AAAAA---CXL transfer slice: " << slice.ptr << ", " << slice.size;
+        //     }
+        // }
 
         ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::WRITE);
         if (result == ErrorCode::OK) {
             for (auto& op : ops) {
-                op.SetSuccess();
+                op->SetSuccess();
             }
             LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
         } else {
             for (auto& op : ops) {
-                op.SetError(result, "TransferDataKernel failed");
+                op->SetError(result, "TransferDataKernel failed");
             }
             LOG(ERROR) << "TransferDataKernel failed with error: " << static_cast<int>(result);
         }
         return;
     }
 
+    // Normal path
     CHECK(transfer_submitter_) << "TransferSubmitter not initialized";
-
     for (auto& op : ops) {
         // Skip operations that already failed in previous stages
-        if (op.IsResolved()) {
+        if (op->IsResolved()) {
             continue;
         }
 
         // Skip operations that don't have replicas (failed in StartBatchPut)
-        if (op.replicas.empty()) {
-            op.SetError(ErrorCode::INTERNAL_ERROR,
+        if (op->replicas.empty()) {
+            op->SetError(ErrorCode::INTERNAL_ERROR,
                         "No replicas available for transfer");
             continue;
         }
@@ -782,12 +888,23 @@ void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
         bool all_transfers_submitted = true;
         std::string failure_context;
 
-        for (size_t replica_idx = 0; replica_idx < op.replicas.size();
+        for (size_t replica_idx = 0; replica_idx < op->replicas.size();
              ++replica_idx) {
-            const auto& replica = op.replicas[replica_idx];
+            const auto& replica = op->replicas[replica_idx];
+            std::vector<Slice> slices;
+
+            if (use_warp) {
+                slices.insert(
+                    slices.end(), 
+                    op->slices.begin() + replica_idx * op->slices.size() / op->replicas.size(), 
+                    op->slices.begin() + (replica_idx + 1) * op->slices.size() / op->replicas.size()
+                );
+            } else {
+                slices.insert(slices.end(), op->slices.begin(), op->slices.end());
+            }
 
             auto submit_result = transfer_submitter_->submit(
-                replica, op.slices, TransferRequest::WRITE);
+                replica, slices, TransferRequest::WRITE);
 
             if (!submit_result) {
                 failure_context = "Failed to submit transfer for replica " +
@@ -796,31 +913,33 @@ void Client::SubmitPutTransfers(std::vector<PutOperation>& ops,
                 break;
             }
 
-            op.pending_transfers.emplace_back(std::move(submit_result.value()));
+            op->pending_transfers.emplace_back(std::move(submit_result.value()));
         }
 
         if (!all_transfers_submitted) {
-            LOG(ERROR) << "Transfer submission failed for key " << op.key
+            LOG(ERROR) << "Transfer submission failed for key " << op->key
                        << ": " << failure_context;
-            op.SetError(ErrorCode::TRANSFER_FAIL, failure_context);
-            op.pending_transfers.clear();
+            op->SetError(ErrorCode::TRANSFER_FAIL, failure_context);
+            op->pending_transfers.clear();
         } else {
-            VLOG(1) << "Successfully submitted " << op.pending_transfers.size()
-                    << " transfers for key " << op.key;
+            VLOG(1) << "Successfully submitted " << op->pending_transfers.size()
+                    << " transfers for key " << op->key;
         }
     }
 }
 
-void Client::WaitForTransfers(std::vector<PutOperation>& ops) {
+void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, const ReplicateConfig& config) {
+    bool use_warp = config.use_warp;
+
     for (auto& op : ops) {
         // Skip operations that already failed or completed
-        if (op.IsResolved()) {
+        if (op->IsResolved()) {
             continue;
         }
 
         // Skip operations with no pending transfers (failed in SubmitTransfers)
-        if (op.pending_transfers.empty()) {
-            op.SetError(ErrorCode::INTERNAL_ERROR,
+        if (op->pending_transfers.empty()) {
+            op->SetError(ErrorCode::INTERNAL_ERROR,
                         "No pending transfers to wait for");
             continue;
         }
@@ -829,8 +948,8 @@ void Client::WaitForTransfers(std::vector<PutOperation>& ops) {
         ErrorCode first_error = ErrorCode::OK;
         size_t failed_transfer_idx = 0;
 
-        for (size_t i = 0; i < op.pending_transfers.size(); ++i) {
-            ErrorCode transfer_result = op.pending_transfers[i].get();
+        for (size_t i = 0; i < op->pending_transfers.size(); ++i) {
+            ErrorCode transfer_result = op->pending_transfers[i].get();
             if (transfer_result != ErrorCode::OK) {
                 if (all_transfers_succeeded) {
                     // Record the first error for reporting
@@ -840,49 +959,64 @@ void Client::WaitForTransfers(std::vector<PutOperation>& ops) {
                 }
                 // Continue waiting for all transfers to avoid resource leaks
             } else {
-                transfer_submitter_->receive(op.pending_transfers[i]);
+                transfer_submitter_->receive(op->pending_transfers[i]);
             }
+        }
+
+        std::string failed_key = op->key;
+        if (use_warp) {
+            auto* warp_op = dynamic_cast<WarpPutOperation*>(op.get());
+            size_t slices_per_key = warp_op->slices.size() / warp_op->keys.size();
+            failed_key = warp_op->keys[failed_transfer_idx / slices_per_key];
         }
 
         if (all_transfers_succeeded) {
             VLOG(1) << "All transfers completed successfully for key "
-                    << op.key;
+                    << failed_key;
             // Transfer phase successful - continue to finalization
             // Note: Don't mark as SUCCESS yet, need to complete finalization
         } else {
             std::string error_context =
                 "Transfer " + std::to_string(failed_transfer_idx) + " failed";
-            LOG(ERROR) << "Transfer failed for key " << op.key << ": "
+            LOG(ERROR) << "Transfer failed for key " << failed_key << ": "
                        << toString(first_error) << " (" << error_context << ")";
-            op.SetError(first_error, error_context);
+            op->SetError(first_error, error_context);
         }
     }
 }
 
-void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kernel) {
+void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, const ReplicateConfig& config, bool use_cxl_kernel) {
     // For each operation,
     // If transfers completed successfully, we need to call BatchPutEnd
     // If the operation failed but has allocated replicas, we need to call
     // BatchPutRevoke
+
+    bool use_warp = config.use_warp;
+    bool transaction_dirty = false;
 
     std::vector<std::string> successful_keys;
     std::vector<size_t> successful_indices;
     std::vector<std::string> failed_keys;
     std::vector<size_t> failed_indices;
 
-    // Reserve space to avoid reallocations
-    successful_keys.reserve(ops.size());
-    successful_indices.reserve(ops.size());
-    failed_keys.reserve(ops.size());
-    failed_indices.reserve(ops.size());
-
-    bool cxl_kernel_batch_dirty = false;
+    if (!use_warp) {
+        // Reserve space to avoid reallocations
+        successful_keys.reserve(ops.size());
+        successful_indices.reserve(ops.size());
+        failed_keys.reserve(ops.size());
+        failed_indices.reserve(ops.size());
+    }
 
     for (size_t i = 0; i < ops.size(); ++i) {
         auto& op = ops[i];
 
+        if (use_warp && !op->IsSuccessful()) {
+            transaction_dirty = true;
+            break;
+        }
+
         if (use_cxl_kernel) {
-            if (cxl_kernel_batch_dirty) {
+            if (transaction_dirty) {
                 if (!successful_keys.empty()) {
                     failed_keys.insert(failed_keys.end(), successful_keys.begin(), successful_keys.end());
                     successful_keys.clear();
@@ -892,32 +1026,88 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
                     successful_indices.clear();
                 }
             }
-            if (op.IsSuccessful() && !op.replicas.empty()) {
-                successful_keys.emplace_back(op.key);
+            if (op->IsSuccessful() && !op->replicas.empty()) {
+                successful_keys.emplace_back(op->key);
                 successful_indices.emplace_back(i);
             } else {
-                cxl_kernel_batch_dirty = true;
-                failed_keys.emplace_back(op.key);
+                transaction_dirty = true;
+                failed_keys.emplace_back(op->key);
                 failed_indices.emplace_back(i);
             }
         } else {
             // Check if operation completed transfers successfully and needs
             // finalization
-            if (!op.IsResolved() && !op.replicas.empty() &&
-                !op.pending_transfers.empty()) {
+            if (!op->IsResolved() && !op->replicas.empty() &&
+                !op->pending_transfers.empty()) {
                 // Transfers completed, needs BatchPutEnd
-                successful_keys.emplace_back(op.key);
+                successful_keys.emplace_back(op->key);
                 successful_indices.emplace_back(i);
-            } else if (op.state != PutOperationState::PENDING &&
-                    !op.replicas.empty()) {
+            } else if (op->state != PutOperationState::PENDING &&
+                    !op->replicas.empty()) {
                 // Operation failed but has allocated replicas, needs BatchPutRevoke
-                failed_keys.emplace_back(op.key);
+                failed_keys.emplace_back(op->key);
                 failed_indices.emplace_back(i);
             }
             // Operations without replicas (early failures) don't need finalization
         }
     }
 
+    // Process warp operations first
+    if (use_warp) {
+        auto* warp_op = dynamic_cast<WarpPutOperation*>(ops[0].get());
+        if (transaction_dirty) {
+            // One failed, all failed, do put_revoke
+            auto revoke_responses = master_client_.BatchPutRevoke(warp_op->keys);
+            if (revoke_responses.size() != warp_op->keys.size()) {
+                LOG(ERROR) << "BatchPutRevoke response size mismatch: expected "
+                        << warp_op->keys.size() << ", got "
+                        << revoke_responses.size();
+                // Mark all failed operations with revoke RPC failure
+                warp_op->SetError(ErrorCode::RPC_FAIL, "BatchPutRevoke response size mismatch");
+            } else {
+                for (size_t i = 0; i < revoke_responses.size(); ++i) {
+                    if (!revoke_responses[i]) {
+                        LOG(ERROR)
+                            << "Failed to revoke put for key " << warp_op->keys[i]
+                            << ": " << toString(revoke_responses[i].error());
+                    } else {
+                        LOG(INFO) << "Successfully revoked failed put for key " << warp_op->keys[i];
+                    }
+                }
+            }
+        } else {
+            // All successful, do put_end
+            auto end_responses = master_client_.BatchPutEnd(warp_op->keys);
+            if (end_responses.size() != warp_op->keys.size()) {
+                LOG(ERROR) << "BatchPutEnd response size mismatch: expected "
+                        << warp_op->keys.size() << ", got "
+                        << end_responses.size();
+                warp_op->SetError(ErrorCode::RPC_FAIL, "BatchPutEnd response size mismatch");
+            } else {
+                for (size_t i = 0; i < end_responses.size(); ++i) {
+                    if (!end_responses[i]) {
+                        LOG(ERROR) << "Failed to finalize put for key "
+                                << warp_op->keys[i] << ": "
+                                << toString(end_responses[i].error());
+                        warp_op->SetError(end_responses[i].error(), "BatchPutEnd failed");
+                    } else {
+                        // Operation fully successful
+                        warp_op->SetSuccess();
+                        LOG(INFO) << "Successfully completed put for key " << warp_op->keys[i];
+                    }
+                }
+            }
+        }
+
+        if (!warp_op->IsResolved()) {
+            warp_op->SetError(ErrorCode::INTERNAL_ERROR, "Operation not resolved after finalization");
+            LOG(ERROR) << "Operation not resolved after finalization";
+        }
+
+        return;
+    }
+
+    // Normal operations
     LOG(INFO) << "Finalizing " << successful_keys.size() << " successful puts"
              << " and " << failed_keys.size() << " failed puts";
 
@@ -929,7 +1119,7 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
                        << successful_keys.size() << ", got "
                        << end_responses.size();
             for (size_t idx : successful_indices) {
-                ops[idx].SetError(ErrorCode::RPC_FAIL,
+                ops[idx]->SetError(ErrorCode::RPC_FAIL,
                                   "BatchPutEnd response size mismatch");
             }
         } else {
@@ -940,11 +1130,11 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
                     LOG(ERROR) << "Failed to finalize put for key "
                                << successful_keys[i] << ": "
                                << toString(end_responses[i].error());
-                    ops[op_idx].SetError(end_responses[i].error(),
+                    ops[op_idx]->SetError(end_responses[i].error(),
                                          "BatchPutEnd failed");
                 } else {
                     // Operation fully successful
-                    ops[op_idx].SetSuccess();
+                    ops[op_idx]->SetSuccess();
                     VLOG(1) << "Successfully completed put for key "
                             << successful_keys[i];
                 }
@@ -961,7 +1151,7 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
                        << revoke_responses.size();
             // Mark all failed operations with revoke RPC failure
             for (size_t idx : failed_indices) {
-                ops[idx].SetError(ErrorCode::RPC_FAIL,
+                ops[idx]->SetError(ErrorCode::RPC_FAIL,
                                   "BatchPutRevoke response size mismatch");
             }
         } else {
@@ -975,8 +1165,8 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
                     // Preserve original error but note revoke failure in
                     // context
                     std::string original_context =
-                        ops[op_idx].failure_context.value_or("unknown error");
-                    ops[op_idx].failure_context =
+                        ops[op_idx]->failure_context.value_or("unknown error");
+                    ops[op_idx]->failure_context =
                         original_context + "; revoke also failed";
                 } else {
                     LOG(INFO) << "Successfully revoked failed put for key "
@@ -988,38 +1178,35 @@ void Client::FinalizeBatchPut(std::vector<PutOperation>& ops, bool use_cxl_kerne
 
     // Ensure all operations have definitive results
     for (auto& op : ops) {
-        if (!op.IsResolved()) {
-            op.SetError(ErrorCode::INTERNAL_ERROR,
+        if (!op->IsResolved()) {
+            op->SetError(ErrorCode::INTERNAL_ERROR,
                         "Operation not resolved after finalization");
-            LOG(ERROR) << "Operation for key " << op.key
+            LOG(ERROR) << "Operation for key " << op->key
                        << " was not properly resolved";
         }
     }
 }
 
 std::vector<tl::expected<void, ErrorCode>> Client::CollectResults(
-    const std::vector<PutOperation>& ops) {
+    const std::vector<std::unique_ptr<PutOperation>>& ops) {
     std::vector<tl::expected<void, ErrorCode>> results;
     results.reserve(ops.size());
 
     for (const auto& op : ops) {
         // With the new structure, result is always set (never nullopt)
-        results.emplace_back(op.result);
+        results.emplace_back(op->result);
 
         // Additional validation and logging for debugging
-        if (!op.result.has_value()) {
+        if (!op->result.has_value()) {
             // if error == object already exist, consider as ok
-            if (op.result.error() == ErrorCode::OBJECT_ALREADY_EXISTS) {
+            if (op->result.error() == ErrorCode::OBJECT_ALREADY_EXISTS) {
                 results.back() = {};
                 continue;
             }
-            LOG(ERROR) << "Operation for key " << op.key
-                       << " failed: " << toString(op.result.error())
-                       << (op.failure_context
-                               ? (" (" + *op.failure_context + ")")
-                               : "");
+            LOG(ERROR) << "Operation for key " << op->key
+                       << " failed: " << toString(op->result.error());
         } else {
-            VLOG(1) << "Operation for key " << op.key
+            VLOG(1) << "Operation for key " << op->key
                     << " completed successfully";
         }
     }
@@ -1027,19 +1214,37 @@ std::vector<tl::expected<void, ErrorCode>> Client::CollectResults(
     return results;
 }
 
-void Client::BatchPuttoLocalFile(std::vector<PutOperation>& ops) {
+void Client::BatchPuttoLocalFile(std::vector<std::unique_ptr<PutOperation>>& ops, const ReplicateConfig& config) {
     if (!storage_backend_) {
         return;  // No storage backend initialized
     }
 
+    bool use_warp = config.use_warp;
+    if (use_warp) {
+        auto* warp_op = dynamic_cast<WarpPutOperation*>(ops[0].get());
+        if (!warp_op->IsSuccessful()) {
+            LOG(WARNING) << "Warp operation failed, skipping local file storage";
+            return;
+        }
+        size_t slices_per_key = warp_op->slices.size() / warp_op->keys.size();
+        for (size_t i = 0; i < warp_op->keys.size(); ++i) {
+            std::vector<Slice> slices;
+            for (size_t j = 0; j < slices_per_key; ++j) {
+                slices.push_back(warp_op->slices[i * slices_per_key + j]);
+            }
+            PutToLocalFile(warp_op->keys[i], slices);
+        }
+        return;
+    }
+
     for (const auto& op : ops) {
-        if (op.IsSuccessful()) {
+        if (op->IsSuccessful()) {
             // Store to local file if operation was successful
-            PutToLocalFile(op.key, op.slices);
+            PutToLocalFile(op->key, op->slices);
         } else {
-            LOG(ERROR) << "Skipping local file storage for key " << op.key
+            LOG(ERROR) << "Skipping local file storage for key " << op->key
                        << " due to failure: "
-                       << toString(op.result.error());
+                       << toString(op->result.error());
         }
     }
 }
@@ -1068,14 +1273,47 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
     const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
     bool use_cxl_cuda_kernel = env && std::string(env) == "1" && client_config.preferred_storage_level == StorageLevel::CXL;
 
-    std::vector<PutOperation> ops = CreatePutOperations(keys, batched_slices);
+    auto ops = CreatePutOperations(keys, batched_slices);
     StartBatchPut(ops, client_config);
     SubmitPutTransfers(ops, client_config, use_cxl_cuda_kernel);
     if (!use_cxl_cuda_kernel) 
-        WaitForTransfers(ops);
-    FinalizeBatchPut(ops, use_cxl_cuda_kernel);
-    BatchPuttoLocalFile(ops);
+        WaitForTransfers(ops, client_config);
+    FinalizeBatchPut(ops, client_config, use_cxl_cuda_kernel);
+    BatchPuttoLocalFile(ops, client_config);
     return CollectResults(ops);
+}
+
+tl::expected<void, ErrorCode> Client::BatchPutWarp(
+    const std::vector<ObjectKey>& keys,
+    std::vector<Slice>& batched_slices,
+    const ReplicateConfig& config) {
+    // Reset important configs
+    ReplicateConfig client_config = config;
+    client_config.client_id = client_id_;
+    client_config.replica_num = 1;
+    client_config.use_warp = true;
+
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    bool use_cxl_cuda_kernel = env && std::string(env) == "1" && client_config.preferred_storage_level == StorageLevel::CXL;
+
+    // Create operations
+    // WarpPutOperation op{keys, batched_slices};
+    // std::vector<WarpPutOperation> ops{op};
+    std::vector<std::unique_ptr<PutOperation>> ops;
+    ops.emplace_back(std::make_unique<WarpPutOperation>(keys, batched_slices));
+
+    // for (auto &slice : batched_slices) {
+    //     LOG(INFO) << "Batch Put Slice: " << slice.ptr << " size: " << slice.size;
+    // }
+
+    // Warp Batch Put Start
+    StartBatchPut(ops, client_config);
+    SubmitPutTransfers(ops, client_config, use_cxl_cuda_kernel);
+    if (!use_cxl_cuda_kernel) 
+        WaitForTransfers(ops, client_config);
+    FinalizeBatchPut(ops, client_config, use_cxl_cuda_kernel);
+    BatchPuttoLocalFile(ops, client_config);
+    return ops[0]->result;
 }
 
 tl::expected<void, ErrorCode> Client::Remove(const ObjectKey& key) {
@@ -1454,7 +1692,7 @@ bool validateTransferParams(
 ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& replica_list,
                                     std::vector<std::vector<Slice>>& slices_list,
                                     TransferRequest::OpCode op_code) { 
-    VLOG(1) << "Start CXL TransferDataKernel, replica list size: " << replica_list.size()
+    LOG(INFO) << "Start CXL TransferDataKernel, replica list size: " << replica_list.size()
             << ", slices list size: " << slices_list.size();
 
     std::vector<AllocatedBuffer::Descriptor> batch_handles;
@@ -1465,6 +1703,8 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
         std::vector<AllocatedBuffer::Descriptor> handles;
         auto& mem_desc = replica.get_memory_descriptor();
         handles = mem_desc.buffer_descriptors;
+
+        // LOG(INFO) << "Replica " << i << ", slices size: " << slices.size() << ", handle size: " << handles.size();
 
         if (!validateTransferParams(handles, slices)) {
             return ErrorCode::INVALID_PARAMS;

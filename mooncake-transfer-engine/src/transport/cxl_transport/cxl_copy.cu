@@ -57,7 +57,7 @@ void launch_batch_memcpy(const void* const* src_list,
     int n_segments,
     cudaStream_t stream) {
 
-    constexpr int THREADS = 256;
+    constexpr int THREADS = 128;
     constexpr int WARPS_PER_BLOCK = THREADS / WARP_SIZE; // 8 warps per block
     constexpr int ITEMS_PER_WARP = 1;
 

@@ -256,13 +256,15 @@ struct ReplicateConfig {
     std::string preferred_segment{};  // Preferred segment for allocation
     UUID client_id{0, 0};
     StorageLevel preferred_storage_level{StorageLevel::RAM};
+    bool use_warp{false};
 
     YLT_REFL(ReplicateConfig, 
              replica_num, 
              with_soft_pin, 
              preferred_segment, 
              client_id, 
-             preferred_storage_level);
+             preferred_storage_level,
+             use_warp);
 
     friend std::ostream& operator<<(std::ostream& os,
                                     const ReplicateConfig& config) noexcept {
@@ -272,6 +274,7 @@ struct ReplicateConfig {
                   << ", client_id: " << config.client_id 
                   << ", preferred_storage_level: " << static_cast<int>(
                        config.preferred_storage_level)
+                  << ", use_warp: " << config.use_warp
                   << " }";
     }
 };

@@ -143,6 +143,10 @@ class DistributedObjectStore {
                                     const std::vector<void *> &buffers,
                                     const std::vector<size_t> &sizes);
 
+    int batch_get_into_warp(const std::vector<std::string> &keys, 
+                            const std::vector<void *> &buffers,
+                            size_t size);
+
     /**
      * @brief Put object data directly from a pre-allocated buffer
      * @param key Key of the object to put
@@ -199,6 +203,12 @@ class DistributedObjectStore {
     std::vector<int> batch_put_from_into_cxl(
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers, const std::vector<size_t> &sizes);
+
+    int batch_put_from_warp(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers, 
+        size_t size,
+        const ReplicateConfig &config = ReplicateConfig{});
 
     int put_parts(const std::string &key,
                   std::vector<std::span<const char>> values,
@@ -310,7 +320,11 @@ class DistributedObjectStore {
         
     std::vector<tl::expected<int64_t, ErrorCode>> batch_get_into_from_cxl_internal(
         const std::vector<std::string> &keys,
-        const std::vector<void *> &buffers, const std::vector<size_t> &sizes);   
+        const std::vector<void *> &buffers, const std::vector<size_t> &sizes);
+    
+    tl::expected<void, ErrorCode> batch_get_into_warp_internal(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers, size_t size);
 
     tl::expected<void, ErrorCode> put_from_internal(
         const std::string &key, void *buffer, size_t size,

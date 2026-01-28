@@ -1210,6 +1210,31 @@ std::string DistributedObjectStore::get_hostname() const {
     return local_hostname;
 }
 
+int DistributedObjectStore::batch_put_from_warp(
+    const std::vector<std::string> &keys, 
+    const std::vector<void *> &buffers,
+    size_t size, 
+    const ReplicateConfig &config) {
+    if (!client_) {
+        LOG(ERROR) << "Client is not initialized";
+        return static_cast<int>(ErrorCode::INVALID_PARAMS);
+    }
+
+    if (buffers.size() % keys.size() != 0) {
+        LOG(ERROR) << "Invalid buffer size in a warp";
+        return static_cast<int>(ErrorCode::INVALID_PARAMS);
+    }
+
+    std::vector<Slice> slices;
+    for (size_t i = 0; i < buffers.size(); i++) {
+        slices.emplace_back(Slice{buffers[i], size});
+    }
+
+    auto put_result = client_->BatchPutWarp(keys, slices, config);
+    LOG(INFO) << "End BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
+    return to_py_ret(put_result);
+}
+
 std::vector<int> DistributedObjectStore::batch_put_from(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes, const ReplicateConfig &config) {
@@ -1282,6 +1307,17 @@ std::vector<int> DistributedObjectStore::batch_get_into_from_cxl(
     }
     LOG(INFO) << "[GET-end] batch_get_into_from_cxl end";
     return results;
+}
+
+int DistributedObjectStore::batch_get_into_warp(
+    const std::vector<std::string> &keys, 
+    const std::vector<void *> &buffers,
+    size_t size) {
+
+    LOG(INFO) << "[GET-start] batch_get_into_warp start";
+    int64_t rc = to_py_ret(batch_get_into_warp_internal(keys, buffers, size));
+    LOG(INFO) << "[PUT-end] batch_get_into_warp end";
+    return rc;
 }
 
 tl::expected<void, ErrorCode> DistributedObjectStore::put_from_internal(
@@ -1651,6 +1687,82 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     // }
 
     return results;
+}
+
+tl::expected<void, ErrorCode> 
+DistributedObjectStore::batch_get_into_warp_internal(
+    const std::vector<std::string> &keys,
+    const std::vector<void *> &buffers, size_t size) {
+    if (!client_) {
+        LOG(ERROR) << "Client is not initialized";
+        return tl::unexpected(ErrorCode::INVALID_PARAMS);
+    }
+
+    if (buffers.size() % keys.size() != 0) {
+        LOG(ERROR) << "Invalid buffer size in a warp";
+        return tl::unexpected(ErrorCode::INVALID_PARAMS);
+    }
+
+    std::vector<std::vector<Replica::Descriptor>> batch_replica_lists;
+    std::unordered_map<std::string, std::vector<Slice>> batch_slices;
+
+    // Query keys
+    auto query_results = client_->BatchQuery(keys);
+    for (size_t i = 0; i < keys.size(); i++) {
+        if (!query_results[i]) {
+            const auto error = query_results[i].error();
+            if (error != ErrorCode::OBJECT_NOT_FOUND) {
+                LOG(ERROR) << "Query failed for key '" << keys[i] << "': " << toString(error);
+            }
+            return tl::unexpected(error);
+        }
+
+        auto replicas = query_results[i].value();
+        if (replicas.empty()) {
+            LOG(ERROR) << "Query returned no replicas for key '" << keys[i] << "'";
+            return tl::unexpected(ErrorCode::INVALID_REPLICA);
+        }
+
+        LOG(INFO) << "Found " << replicas.size() << " replicas for key '" << keys[i] << "'";
+
+        // We only support memory replicas for now
+        // TODO: Support disk replicas
+        if (replicas[0].is_memory_replica() == false) {
+            LOG(ERROR) << "Query returned non-memory replica for key '" << keys[i] << "'";
+            return tl::unexpected(ErrorCode::OBJECT_NOT_FOUND);
+        }
+
+        const auto& replica = replicas[0];
+        uint64_t slice_size = replicas[0].get_memory_descriptor().buffer_descriptors[0].size_;
+        if (slice_size > size) {
+            LOG(ERROR) << "Buffer is too small for key '" << keys[i] 
+                       << "', required size: " << slice_size 
+                       << ", available size: " << size;
+            return tl::unexpected(ErrorCode::BUFFER_OVERFLOW);
+        }
+
+        std::vector<Slice> key_slices;
+        // Also, we do not consider the replica on the disk for now
+        auto& handles = replica.get_memory_descriptor().buffer_descriptors;
+        size_t slice_num_per_replica = handles.size();
+
+        for (size_t j = 0; j < slice_num_per_replica; ++j) {
+            auto idx = i * slice_num_per_replica + j;
+            key_slices.emplace_back(Slice{buffers[idx], handles[j].size_});
+        }
+
+        batch_replica_lists.emplace_back(std::move(replicas));
+        batch_slices[keys[i]] = key_slices;
+    }
+
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    bool use_cxl_cuda_kernel = env && std::string(env) == "1";
+
+    LOG(INFO) << "BatchGetWarp Start";
+    auto res = client_->BatchGetWarp(keys, batch_replica_lists, batch_slices, use_cxl_cuda_kernel);
+    LOG(INFO) << "BatchGetWarp End";
+
+    return res;
 }
 
 std::vector<tl::expected<void, ErrorCode>>
@@ -2142,6 +2254,27 @@ PYBIND11_MODULE(store, m) {
             py::arg("keys"), py::arg("buffer_ptrs"), py::arg("sizes"),
             "Get object data from CXL segment directly into pre-allocated buffers for multiple keys")
         .def(
+            "batch_get_into_warp",
+            [](DistributedObjectStore &self,
+               const std::vector<std::string> &keys,
+               const std::vector<uintptr_t> &buffer_ptrs,
+               size_t size,
+               bool use_cxl) {
+                std::vector<void *> buffers;
+                buffers.reserve(buffer_ptrs.size());
+                for (uintptr_t ptr : buffer_ptrs) {
+                    buffers.push_back(reinterpret_cast<void *>(ptr));
+                }
+                ReplicateConfig config = ReplicateConfig{};
+                config.use_warp = true;
+                config.preferred_storage_level= use_cxl ? StorageLevel::CXL : StorageLevel::RAM;
+                
+                py::gil_scoped_release release;
+                return self.batch_get_into_warp(keys, buffers, size);
+            },
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"), py::arg("use_cxl"), 
+            "Get object data from CXL segment directly into pre-allocated buffers for multiple keys")
+        .def(
             "put_from",
             [](DistributedObjectStore &self, const std::string &key,
                uintptr_t buffer_ptr, size_t size,
@@ -2165,6 +2298,7 @@ PYBIND11_MODULE(store, m) {
             },
             py::arg("key"), py::arg("buffer_ptr"), py::arg("size"),
             "Put object data directly from a pre-allocated buffer into CXL segment")
+            
         .def(
             "put_from_with_metadata",
             [](DistributedObjectStore &self, const std::string &key,
@@ -2221,6 +2355,27 @@ PYBIND11_MODULE(store, m) {
             },
             py::arg("keys"), py::arg("buffer_ptrs"), py::arg("sizes"),
             "Put object data directly from pre-allocated buffers for multiple keys into CXL segment")
+        .def(
+            "batch_put_from_warp",
+            [](DistributedObjectStore &self,
+               const std::vector<std::string> &keys,
+               const std::vector<uintptr_t> &buffer_ptrs,
+               size_t size,
+               bool use_cxl) {
+                std::vector<void *> buffers;
+                buffers.reserve(buffer_ptrs.size());
+                for (uintptr_t ptr : buffer_ptrs) {
+                    buffers.push_back(reinterpret_cast<void *>(ptr));
+                }
+                ReplicateConfig config = ReplicateConfig{};
+                config.use_warp = true;
+                config.preferred_storage_level = use_cxl ? StorageLevel::CXL : StorageLevel::RAM;
+
+                py::gil_scoped_release release;
+                return self.batch_put_from_warp(keys, buffers, size, config);
+            },
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"), py::arg("use_cxl"),
+            "Put object data directly from pre-allocated buffers for multiple keys by warp")
         .def(
             "put",
             [](DistributedObjectStore &self, const std::string &key,

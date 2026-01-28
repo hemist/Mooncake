@@ -386,8 +386,15 @@ auto MasterService::PutStart(const std::string& key,
     auto it = metadata_shards_[shard_idx].metadata.find(key);
     if (it != metadata_shards_[shard_idx].metadata.end() &&
         !CleanupStaleHandles(it->second)) {
-        LOG(INFO) << "key=" << key << ", info=object_already_exists";
-        return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
+        LOG(WARNING) << "key=" << key << ", info=object_already_exists";
+        // return tl::make_unexpected(ErrorCode::OBJECT_ALREADY_EXISTS);
+
+        // recover the object that is already exists
+        std::vector<Replica::Descriptor> replica_list;
+        for (auto& replica : it->second.replicas) {
+            replica_list.emplace_back(replica.get_descriptor());
+        }
+        return replica_list;
     }
 
     // Update replicate_config

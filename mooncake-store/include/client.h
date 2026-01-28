@@ -120,6 +120,12 @@ class Client {
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
         std::unordered_map<std::string, std::vector<Slice>>& slices);
 
+    tl::expected<void, ErrorCode> BatchGetWarp(
+        const std::vector<std::string>& object_keys,
+        const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
+        std::unordered_map<std::string, std::vector<Slice>>& slices,
+        bool use_cuda_kernel = false);
+
     /**
      * @brief Stores data with replication
      * @param key Object key
@@ -141,6 +147,11 @@ class Client {
     std::vector<tl::expected<void, ErrorCode>> BatchPut(
         const std::vector<ObjectKey>& keys,
         std::vector<std::vector<Slice>>& batched_slices,
+        const ReplicateConfig& config);
+
+    tl::expected<void, ErrorCode> BatchPutWarp(
+        const std::vector<ObjectKey>& keys,
+        std::vector<Slice>& batched_slices,
         const ReplicateConfig& config);
 
     /**
@@ -277,23 +288,26 @@ class Client {
     /**
      * @brief Batch put helper methods for structured approach
      */
-    std::vector<PutOperation> CreatePutOperations(
+    std::vector<std::unique_ptr<PutOperation>> CreatePutOperations(
         const std::vector<ObjectKey>& keys,
         const std::vector<std::vector<Slice>>& batched_slices);
-    void StartBatchPut(std::vector<PutOperation>& ops,
+    void StartBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
                        const ReplicateConfig& config);
-    void SubmitPutTransfers(std::vector<PutOperation>& ops,
+    void SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
                         const ReplicateConfig& config, 
                         bool use_cxl_kernel = false);
-    void WaitForTransfers(std::vector<PutOperation>& ops);
-    void FinalizeBatchPut(std::vector<PutOperation>& ops,
+    void WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
+                        const ReplicateConfig& config);
+    void FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
+                          const ReplicateConfig& config,
                           bool use_cxl_kernel = false);
-    void BatchPuttoLocalFile(std::vector<PutOperation>& ops);
+    void BatchPuttoLocalFile(std::vector<std::unique_ptr<PutOperation>>& ops,
+                            const ReplicateConfig& config);
 
     void DispatchProtocols(const std::vector<std::string> &protocols);
 
     std::vector<tl::expected<void, ErrorCode>> CollectResults(
-        const std::vector<PutOperation>& ops);
+        const std::vector<std::unique_ptr<PutOperation>>& ops);
 
     // Core components
     TransferEngine transfer_engine_;

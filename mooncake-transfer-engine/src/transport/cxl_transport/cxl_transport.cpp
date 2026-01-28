@@ -186,7 +186,9 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
         // // cudaHostRegister is finished in cxlDevInit()
         // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
         // LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
-        CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
+
+        // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyDeviceToHost, 0));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
     } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
@@ -194,7 +196,9 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
         // cudaHostRegister is finished in cxlDevInit()
         // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
         // LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
-        CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
+
+        // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyHostToDevice, 0));
         CUDA_CHECK(cudaDeviceSynchronize());
         return 0;
     } else {
