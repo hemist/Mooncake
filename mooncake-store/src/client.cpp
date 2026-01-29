@@ -484,73 +484,67 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
     const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
     std::unordered_map<std::string, std::vector<Slice>>& slices) {
 
-    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
-    if (env) {
-        std::vector<tl::expected<void, ErrorCode>> results;
+    std::vector<tl::expected<void, ErrorCode>> results;
 
-        // Validate input size consistency
-        if (replica_lists.size() != object_keys.size()) {
-            LOG(ERROR) << "Replica lists size (" << replica_lists.size()
-                    << ") doesn't match object keys size (" << object_keys.size()
-                    << ")";
-            results.reserve(object_keys.size());
-            for (size_t i = 0; i < object_keys.size(); ++i) {
-                results.emplace_back(tl::unexpected(ErrorCode::INVALID_PARAMS));
-            }
-            return results;
-        }
-
-        std::vector<Replica::Descriptor> transfer_replica_list;
-        std::vector<std::vector<Slice>> transfer_slices_list;
-
+    // Validate input size consistency
+    if (replica_lists.size() != object_keys.size()) {
+        LOG(ERROR) << "Replica lists size (" << replica_lists.size()
+                << ") doesn't match object keys size (" << object_keys.size()
+                << ")";
+        results.reserve(object_keys.size());
         for (size_t i = 0; i < object_keys.size(); ++i) {
-            const auto& key = object_keys[i];
-            const auto& replica_list = replica_lists[i];
-
-            auto slices_it = slices.find(key);
-            if (slices_it == slices.end()) {
-                LOG(ERROR) << "Slices not found for key: " << key;
-                results[i] = tl::unexpected(ErrorCode::INVALID_PARAMS);
-                continue;
-            }
-
-            // Find the first complete replica for this key
-            Replica::Descriptor replica;
-            ErrorCode err = FindFirstCompleteReplica(replica_list, replica);
-            if (err != ErrorCode::OK || replica.storage_level != StorageLevel::CXL) {
-                if (err == ErrorCode::INVALID_REPLICA) {
-                    LOG(ERROR) << "no_complete_replicas_found key=" << key;
-                }
-                if (replica.storage_level != StorageLevel::CXL) {
-                    err = ErrorCode::INTERNAL_ERROR;
-                    LOG(ERROR) << "not a cxl replica, key=" << key;
-                }
-                results[i] = tl::unexpected(err);
-                continue;
-            }
-
-            VLOG(1) << "CXL batch get transfer, slices.size():" << (slices_it->second).size();
-            transfer_replica_list.push_back(replica);
-            transfer_slices_list.push_back(slices_it->second);
-        }
-
-        ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::READ);
-        if (result == ErrorCode::OK) {
-            LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
-            // for (size_t i = 0; i < object_keys.size(); ++i) {
-            //     results[i] = tl::unexpected(result);
-            // }
-        } else {
-            LOG(INFO) << "TransferDataKernel failed with error: " << static_cast<int>(result);
-            for (size_t i = 0; i < object_keys.size(); ++i) {
-                results[i] = tl::unexpected(result);
-            }
+            results.emplace_back(tl::unexpected(ErrorCode::INVALID_PARAMS));
         }
         return results;
     }
 
-    // Fallback to normal BatchGet
-    return BatchGet(object_keys, replica_lists, slices);
+    std::vector<Replica::Descriptor> transfer_replica_list;
+    std::vector<std::vector<Slice>> transfer_slices_list;
+
+    for (size_t i = 0; i < object_keys.size(); ++i) {
+        const auto& key = object_keys[i];
+        const auto& replica_list = replica_lists[i];
+
+        auto slices_it = slices.find(key);
+        if (slices_it == slices.end()) {
+            LOG(ERROR) << "Slices not found for key: " << key;
+            results[i] = tl::unexpected(ErrorCode::INVALID_PARAMS);
+            continue;
+        }
+
+        // Find the first complete replica for this key
+        Replica::Descriptor replica;
+        ErrorCode err = FindFirstCompleteReplica(replica_list, replica);
+        if (err != ErrorCode::OK || replica.storage_level != StorageLevel::CXL) {
+            if (err == ErrorCode::INVALID_REPLICA) {
+                LOG(ERROR) << "no_complete_replicas_found key=" << key;
+            }
+            if (replica.storage_level != StorageLevel::CXL) {
+                err = ErrorCode::INTERNAL_ERROR;
+                LOG(ERROR) << "not a cxl replica, key=" << key;
+            }
+            results[i] = tl::unexpected(err);
+            continue;
+        }
+
+        VLOG(1) << "CXL batch get transfer, slices.size():" << (slices_it->second).size();
+        transfer_replica_list.push_back(replica);
+        transfer_slices_list.push_back(slices_it->second);
+    }
+
+    ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::READ);
+    if (result == ErrorCode::OK) {
+        LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
+        // for (size_t i = 0; i < object_keys.size(); ++i) {
+        //     results[i] = tl::unexpected(result);
+        // }
+    } else {
+        LOG(INFO) << "TransferDataKernel failed with error: " << static_cast<int>(result);
+        for (size_t i = 0; i < object_keys.size(); ++i) {
+            results[i] = tl::unexpected(result);
+        }
+    }
+    return results;
 }
 
 tl::expected<void, ErrorCode> Client::BatchGetWarp(
@@ -559,25 +553,14 @@ tl::expected<void, ErrorCode> Client::BatchGetWarp(
     std::unordered_map<std::string, std::vector<Slice>>& slices,
     bool use_cuda_kernel) {
     
-    tl::expected<void, ErrorCode> results;
-    if (use_cuda_kernel) {
-        auto res_list = BatchGetCxl(object_keys, replica_lists, slices);
-        for (auto& res : res_list) {
-            if (!res) {
-                results = res;
-                break;
-            }
-        }
-    } else {
-        auto res_list = BatchGet(object_keys, replica_lists, slices);
-        for (auto& res : res_list) {
-            if (!res) {
-                results = res;
-                break;
-            }
-        }
+    auto res_list = use_cuda_kernel ? 
+                    BatchGetCxl(object_keys, replica_lists, slices): 
+                    BatchGet(object_keys, replica_lists, slices);
+    for (auto& res : res_list) {
+        if (!res)
+            return tl::unexpected(res.error());
     }
-    return results;
+    
 }
 
 
@@ -922,8 +905,8 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
             op->SetError(ErrorCode::TRANSFER_FAIL, failure_context);
             op->pending_transfers.clear();
         } else {
-            VLOG(1) << "Successfully submitted " << op->pending_transfers.size()
-                    << " transfers for key " << op->key;
+            LOG(INFO) << "Successfully submitted " << op->pending_transfers.size()
+                      << " transfers for key " << op->key;
         }
     }
 }
@@ -939,8 +922,7 @@ void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, c
 
         // Skip operations with no pending transfers (failed in SubmitTransfers)
         if (op->pending_transfers.empty()) {
-            op->SetError(ErrorCode::INTERNAL_ERROR,
-                        "No pending transfers to wait for");
+            op->SetError(ErrorCode::INTERNAL_ERROR, "No pending transfers to wait for");
             continue;
         }
 
@@ -964,15 +946,16 @@ void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, c
         }
 
         std::string failed_key = op->key;
-        if (use_warp) {
+        if (use_warp && !all_transfers_succeeded) {
             auto* warp_op = dynamic_cast<WarpPutOperation*>(op.get());
-            size_t slices_per_key = warp_op->slices.size() / warp_op->keys.size();
-            failed_key = warp_op->keys[failed_transfer_idx / slices_per_key];
+            // size_t slices_per_key = warp_op->slices.size() / warp_op->keys.size();
+            failed_key = warp_op->keys[failed_transfer_idx];
         }
 
         if (all_transfers_succeeded) {
-            VLOG(1) << "All transfers completed successfully for key "
-                    << failed_key;
+            LOG(INFO) << "All transfers completed successfully for key "
+                      << failed_key;
+            op->SetSuccess();
             // Transfer phase successful - continue to finalization
             // Note: Don't mark as SUCCESS yet, need to complete finalization
         } else {
@@ -992,70 +975,11 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
     // BatchPutRevoke
 
     bool use_warp = config.use_warp;
-    bool transaction_dirty = false;
-
-    std::vector<std::string> successful_keys;
-    std::vector<size_t> successful_indices;
-    std::vector<std::string> failed_keys;
-    std::vector<size_t> failed_indices;
-
-    if (!use_warp) {
-        // Reserve space to avoid reallocations
-        successful_keys.reserve(ops.size());
-        successful_indices.reserve(ops.size());
-        failed_keys.reserve(ops.size());
-        failed_indices.reserve(ops.size());
-    }
-
-    for (size_t i = 0; i < ops.size(); ++i) {
-        auto& op = ops[i];
-
-        if (use_warp && !op->IsSuccessful()) {
-            transaction_dirty = true;
-            break;
-        }
-
-        if (use_cxl_kernel) {
-            if (transaction_dirty) {
-                if (!successful_keys.empty()) {
-                    failed_keys.insert(failed_keys.end(), successful_keys.begin(), successful_keys.end());
-                    successful_keys.clear();
-                }
-                if (!successful_indices.empty()) {
-                    failed_indices.insert(failed_indices.end(), successful_indices.begin(), successful_indices.end());
-                    successful_indices.clear();
-                }
-            }
-            if (op->IsSuccessful() && !op->replicas.empty()) {
-                successful_keys.emplace_back(op->key);
-                successful_indices.emplace_back(i);
-            } else {
-                transaction_dirty = true;
-                failed_keys.emplace_back(op->key);
-                failed_indices.emplace_back(i);
-            }
-        } else {
-            // Check if operation completed transfers successfully and needs
-            // finalization
-            if (!op->IsResolved() && !op->replicas.empty() &&
-                !op->pending_transfers.empty()) {
-                // Transfers completed, needs BatchPutEnd
-                successful_keys.emplace_back(op->key);
-                successful_indices.emplace_back(i);
-            } else if (op->state != PutOperationState::PENDING &&
-                    !op->replicas.empty()) {
-                // Operation failed but has allocated replicas, needs BatchPutRevoke
-                failed_keys.emplace_back(op->key);
-                failed_indices.emplace_back(i);
-            }
-            // Operations without replicas (early failures) don't need finalization
-        }
-    }
 
     // Process warp operations first
     if (use_warp) {
         auto* warp_op = dynamic_cast<WarpPutOperation*>(ops[0].get());
-        if (transaction_dirty) {
+        if (!warp_op->IsSuccessful()) {
             // One failed, all failed, do put_revoke
             auto revoke_responses = master_client_.BatchPutRevoke(warp_op->keys);
             if (revoke_responses.size() != warp_op->keys.size()) {
@@ -1105,6 +1029,58 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
         }
 
         return;
+    }
+
+    std::vector<std::string> successful_keys;
+    std::vector<size_t> successful_indices;
+    std::vector<std::string> failed_keys;
+    std::vector<size_t> failed_indices;
+    bool transaction_dirty = false;
+
+    // Reserve space to avoid reallocations
+    successful_keys.reserve(ops.size());
+    successful_indices.reserve(ops.size());
+    failed_keys.reserve(ops.size());
+    failed_indices.reserve(ops.size());
+
+    for (size_t i = 0; i < ops.size(); ++i) {
+        auto& op = ops[i];
+
+        if (use_cxl_kernel) {
+            if (transaction_dirty) {
+                if (!successful_keys.empty()) {
+                    failed_keys.insert(failed_keys.end(), successful_keys.begin(), successful_keys.end());
+                    successful_keys.clear();
+                }
+                if (!successful_indices.empty()) {
+                    failed_indices.insert(failed_indices.end(), successful_indices.begin(), successful_indices.end());
+                    successful_indices.clear();
+                }
+            }
+            if (op->IsSuccessful() && !op->replicas.empty()) {
+                successful_keys.emplace_back(op->key);
+                successful_indices.emplace_back(i);
+            } else {
+                transaction_dirty = true;
+                failed_keys.emplace_back(op->key);
+                failed_indices.emplace_back(i);
+            }
+        } else {
+            // Check if operation completed transfers successfully and needs
+            // finalization
+            if (!op->IsResolved() && !op->replicas.empty() &&
+                !op->pending_transfers.empty()) {
+                // Transfers completed, needs BatchPutEnd
+                successful_keys.emplace_back(op->key);
+                successful_indices.emplace_back(i);
+            } else if (op->state != PutOperationState::PENDING &&
+                    !op->replicas.empty()) {
+                // Operation failed but has allocated replicas, needs BatchPutRevoke
+                failed_keys.emplace_back(op->key);
+                failed_indices.emplace_back(i);
+            }
+            // Operations without replicas (early failures) don't need finalization
+        }
     }
 
     // Normal operations
@@ -1710,8 +1686,12 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
             return ErrorCode::INVALID_PARAMS;
         }
 
-        batch_handles.push_back(handles[0]);
-        batch_slices.push_back(slices[0]);
+        // batch_handles.push_back(handles[0]);
+        // batch_slices.push_back(slices[0]);
+        for (size_t j = 0; j < slices.size(); ++j) {
+            batch_handles.push_back(handles[j]);
+            batch_slices.push_back(slices[j]);
+        } 
     }
 
     BatchID batch_id = transfer_engine_.allocateBatchID(batch_handles.size());

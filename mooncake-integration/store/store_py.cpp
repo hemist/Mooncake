@@ -1550,8 +1550,6 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     std::vector<tl::expected<int64_t, ErrorCode>> results;
     results.reserve(num_keys);  
 
-    
-
     if (num_keys == 0) {
         return results;
     }
@@ -1668,23 +1666,25 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
         batch_replica_lists.push_back(op.cxl_replica);
         batch_slices[op.key] = op.slices;
     }
+
+    const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
+    bool use_cxl_cuda_kernel = env && std::string(env) == "1";
   
-    const auto batch_get_results =
-        client_->BatchGetCxl(batch_keys, batch_replica_lists, batch_slices);
+    const auto batch_get_results = use_cxl_cuda_kernel ?
+        client_->BatchGetCxl(batch_keys, batch_replica_lists, batch_slices):
+        client_->BatchGet(batch_keys, batch_replica_lists, batch_slices);
 
-    
+    for (size_t j = 0; j < batch_get_results.size(); ++j) {
+        const auto &op = valid_operations[j];  
 
-    // for (size_t j = 0; j < batch_get_results.size(); ++j) {
-        // const auto &op = valid_operations[j];  
-
-        // if (!batch_get_results[j]) {
-        //     const auto error = batch_get_results[j].error();
-        //     LOG(ERROR) << "BatchGet from CXL segment failed for key '" << op.key
-        //                << "': " << toString(error);
-        //     results[op.original_index] = tl::unexpected(error);
-        // }
-        // LOG(INFO) << "BatchPut from CXL segment completed:" << j;
-    // }
+        if (!batch_get_results[j]) {
+            const auto error = batch_get_results[j].error();
+            LOG(ERROR) << "BatchGet from CXL segment failed for key '" << op.key
+                       << "': " << toString(error);
+            results[op.original_index] = tl::unexpected(error);
+        }
+        LOG(INFO) << "BatchPut from CXL segment completed:" << j;
+    }
 
     return results;
 }
@@ -2265,10 +2265,6 @@ PYBIND11_MODULE(store, m) {
                 for (uintptr_t ptr : buffer_ptrs) {
                     buffers.push_back(reinterpret_cast<void *>(ptr));
                 }
-                ReplicateConfig config = ReplicateConfig{};
-                config.use_warp = true;
-                config.preferred_storage_level= use_cxl ? StorageLevel::CXL : StorageLevel::RAM;
-                
                 py::gil_scoped_release release;
                 return self.batch_get_into_warp(keys, buffers, size);
             },

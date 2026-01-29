@@ -120,6 +120,14 @@ class Client {
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
         std::unordered_map<std::string, std::vector<Slice>>& slices);
 
+    
+    /**
+     * @brief Transfers data using pre-queried object information by warp
+     * @param object_keys Keys of the objects
+     * @param object_infos Previously queried object metadata
+     * @param slices Map of object keys to their data slices
+     * @return ErrorCode indicating success/failure
+     */
     tl::expected<void, ErrorCode> BatchGetWarp(
         const std::vector<std::string>& object_keys,
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
@@ -149,6 +157,12 @@ class Client {
         std::vector<std::vector<Slice>>& batched_slices,
         const ReplicateConfig& config);
 
+    /**
+     * @brief Batch put data by warp
+     * @param keys Object keys in a warp
+     * @param batched_slices Vector of data slices to store (one key to several slices)
+     * @param config Replication configuration
+     */
     tl::expected<void, ErrorCode> BatchPutWarp(
         const std::vector<ObjectKey>& keys,
         std::vector<Slice>& batched_slices,
