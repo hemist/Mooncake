@@ -24,6 +24,7 @@
 
 #include "AllocationClass.h"
 #include "Slab.h"
+#include <iostream>
 
 namespace facebook {
 namespace cachelib {
@@ -109,6 +110,18 @@ class MemoryPool {
   // free memory available.
   bool allSlabsAllocated() const noexcept {
     auto currAdvisedSize = getPoolAdvisedSize();
+    return (currSlabAllocSize_ + currAdvisedSize + Slab::kSize) > maxSize_;
+  }
+  bool allSlabsAllocated111() const noexcept {
+    auto currAdvisedSize = getPoolAdvisedSize();
+    std::cout << "curSlabsAdvised_[" << curSlabsAdvised_ << "] "
+              << "currSlabAllocSize_[" << currSlabAllocSize_ << "] "
+              << "currAdvisedSize[" << currAdvisedSize << "] "
+              << "Slab::kSize[" << Slab::kSize << "] "
+              << "maxSize_[" << maxSize_ << "] "
+              << "result:[" << ((currSlabAllocSize_ + currAdvisedSize + Slab::kSize) > maxSize_) << "]"
+              << std::endl;
+
     return (currSlabAllocSize_ + currAdvisedSize + Slab::kSize) > maxSize_;
   }
 

@@ -232,7 +232,9 @@ void* MemoryPool::allocate(uint32_t size) {
   // that release slab, bump down the currSlabAllocSize_ after actually
   // releasing and adding it to free list or slab allocator.
   if (allSlabsAllocated()) {
-    std::cout << "allocating  1 " << alloc << std::endl;
+    std::cout << "allocating  1 " << allocSize << std::endl;
+    allSlabsAllocated111();
+    ac.canAllocateFromCurrentSlabLocked111();
     return nullptr;
   }
 

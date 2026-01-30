@@ -25,6 +25,7 @@
 #include <random>
 #include <stdexcept>
 #include <thread>
+#include <iostream>
 
 using namespace facebook::cachelib;
 
@@ -102,6 +103,8 @@ void* AllocationClass::addSlabAndAllocate(Slab* slab) {
 void* AllocationClass::allocateFromCurrentSlabLocked() noexcept {
   XDCHECK(canAllocateFromCurrentSlabLocked());
   void* ret = currSlab_->memoryAtOffset(currOffset_);
+  std::cout << "allocateFromCurrentSlabLocked: " << (void*) currSlab_
+  << " at[" << currOffset_ << "] len[" << allocationSize_ << "] " << std::endl;
   currOffset_ += allocationSize_;
   return ret;
 }
@@ -110,9 +113,20 @@ bool AllocationClass::canAllocateFromCurrentSlabLocked() const noexcept {
   return (currSlab_ != nullptr) &&
          ((currOffset_ + allocationSize_) <= Slab::kSize);
 }
+bool AllocationClass::canAllocateFromCurrentSlabLocked111() const noexcept {
+  std::cout << "canAllocateFromCurrentSlabLocked" 
+  << " currSlab_ " << (void*) currSlab_
+  << " currOffset_ " << currOffset_ 
+  << " allocationSize_ " << allocationSize_
+  << " Slab::kSize " << Slab::kSize
+  << std::endl;
+  return (currSlab_ != nullptr) &&
+         ((currOffset_ + allocationSize_) <= Slab::kSize);
+}
 
 void* AllocationClass::allocate() {
   if (!canAllocate_) {
+    std::cout << "AllocationClass::allocate Can not allocate from cache. All slabs are full" << std::endl;
     return nullptr;
   }
   std::unique_lock l(lock_);
