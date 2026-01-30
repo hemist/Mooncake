@@ -166,6 +166,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
     }
 
    private:
+    size_t cxl_size_{DEFAULT_CXL_SIZE};
     std::unique_ptr<AllocatedBuffer> CxlOffsetAllocate(
         const std::shared_ptr<BufferAllocatorBase>& cxl_global_allocator,
         size_t size, const ReplicateConfig& config) {
@@ -176,7 +177,11 @@ class LevelAllocationStrategy : public AllocationStrategy {
 
         auto allocated_buffer = cxl_global_allocator->allocate(size);
         if (allocated_buffer) {
-            allocated_buffer->change_to_cxl(config.preferred_segment);
+            bool in_range = allocated_buffer->change_to_cxl(config.preferred_segment, cxl_size_);
+            if (!in_range) {
+                cxl_global_allocator->deallocate(allocated_buffer.get());
+                return nullptr;
+            }
         }
 
         return allocated_buffer;

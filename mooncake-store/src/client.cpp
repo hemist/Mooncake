@@ -1067,7 +1067,6 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
         } else {
             // Check if operation completed transfers successfully and needs
             // finalization
-            LOG(INFO) << "op->status = " << static_cast<int>(op->state);
             if (op->IsSuccessful()) {
                 // Transfers completed, needs BatchPutEnd
                 successful_keys.emplace_back(op->key);
@@ -1649,7 +1648,7 @@ bool validateTransferParams(
     }
 
     if (handles.size() != 1) {
-        LOG(ERROR) << "replica should have only one handle, but got size " << handles.size();
+        LOG(WARNING) << "replica should have only one handle, but got size " << handles.size();
     }
 
     for (size_t i = 0; i < handles.size(); ++i) {

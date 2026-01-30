@@ -42,6 +42,8 @@ static const size_t DEFAULT_CXL_BASE = 0x100000000ULL;
 // 将 DEFAULT_CXL_SIZE 改为函数形式，从环境变量 MC_CXL_DEV_SIZE 获取值，如未设置则报错
 inline size_t get_default_cxl_size() {
     const char* env_cxl_dev_size = std::getenv("MC_CXL_DEV_SIZE");
+    LOG(INFO) << "raw MC_CXL_DEV_SIZE=[" << env_cxl_dev_size << "]";
+
     if (env_cxl_dev_size) {
         char* end = nullptr;
         unsigned long long val = strtoull(env_cxl_dev_size, &end, 10);
@@ -55,7 +57,8 @@ inline size_t get_default_cxl_size() {
     return (4ULL * 1024 * 1024 * 1024);
 }
 
-#define DEFAULT_CXL_SIZE (get_default_cxl_size())
+// #define DEFAULT_CXL_SIZE (get_default_cxl_size())
+#define DEFAULT_CXL_SIZE 1ULL * 1024 * 1024 * 1024
 
 // Forward declarations
 class BufferAllocatorBase;
@@ -347,13 +350,20 @@ class AllocatedBuffer {
 
     [[nodiscard]] StorageLevel get_level() const { return level; }
 
-    void change_to_cxl(std::string client_segment_name) {
+    bool change_to_cxl(std::string client_segment_name, size_t cxl_size) {
         u_int64_t offset_raw = reinterpret_cast<uintptr_t>(buffer_ptr_);
+        u_int64_t offset_cxl = offset_raw - DEFAULT_CXL_BASE;
+        if (offset_cxl >= cxl_size) {
+            LOG(ERROR) << "CXL offset out of range: " << offset_cxl;
+            return false;
+        }
+
         buffer_ptr_ = reinterpret_cast<void*>(offset_raw - DEFAULT_CXL_BASE);
         level = StorageLevel::CXL;
         segment_name_ = client_segment_name;
         MasterMetricManager::instance().dec_allocated_dram_size(size_);
         MasterMetricManager::instance().inc_allocated_cxl_size(size_);
+        return true;
     }
 
     void* get_vaddr_from_cxl() {
