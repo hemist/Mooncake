@@ -11,7 +11,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
 
     // Check if cxl storage is enable
     if (segment_manager_->enable_cxl_ && segment.level == StorageLevel::CXL) {
-        if (segment_manager_->memory_allocator_ == BufferAllocatorType::CACHELIB) {
+        // if (segment_manager_->memory_allocator_ == BufferAllocatorType::CACHELIB) {
             auto allocator = segment_manager_->cxl_global_allocator_;
             if (segment_manager_->cxl_global_allocator_ == nullptr ||
                 segment_manager_->allocators_.empty()) {
@@ -27,7 +27,7 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
             MasterMetricManager::instance().inc_total_capacity(size);
 
             return ErrorCode::OK;
-        }
+        // }
         return ErrorCode::INTERNAL_ERROR;
     }
     
@@ -359,7 +359,12 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
 
 void SegmentManager::initializeCxlAllocator() {
     VLOG(1) << "Init CXL global allocator.";
-    cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
+    // cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
+    //                                             DEFAULT_CXL_PATH, 
+    //                                             DEFAULT_CXL_BASE, 
+    //                                             DEFAULT_CXL_SIZE);
+
+    cxl_global_allocator_ = std::make_shared<OffsetBufferAllocator>(
                                                 DEFAULT_CXL_PATH, 
                                                 DEFAULT_CXL_BASE, 
                                                 DEFAULT_CXL_SIZE);

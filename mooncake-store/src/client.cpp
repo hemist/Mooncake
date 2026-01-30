@@ -780,7 +780,7 @@ void Client::StartBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
                 // Operation continues to next stage - result remains INTERNAL_ERROR
                 // until fully successful
                 LOG(INFO) << "Successfully started put for key " << ops[i]->key
-                        << " with " << ops[i]->replicas.size() << " replicas";
+                        << " with " << ops[i]->replicas.size() << " replicas, " << start_responses[i].value()[0].get_memory_descriptor().buffer_descriptors[0].size_;
             }
         }
     }    
