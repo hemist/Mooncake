@@ -532,7 +532,12 @@ Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferReques
         );
     }
 
-    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaError_t err  = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        LOG(ERROR) << "CxlTransport::submitTransferTaskKernel cudaDeviceSynchronize failed: "
+                   << cudaGetErrorString(err);
+        return Status::CxlKernelFail("cudaDeviceSynchronize failed");
+    }
     // LOG(INFO) << "CxlTransport::submitTransfer-Direct-Kernel done";
     return Status::OK();
 }

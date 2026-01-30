@@ -39,6 +39,10 @@ CachelibBufferAllocator::CachelibBufferAllocator(std::string segment_name, size_
         1;
     header_region_start_ = std::make_unique<char[]>(header_region_size_);
 
+    LOG(INFO) << "sizeof(facebook::cachelib::SlabHeader) = " << sizeof(facebook::cachelib::SlabHeader);
+    LOG(INFO) << "sizeof(facebook::cachelib::Slab) = " << sizeof(facebook::cachelib::Slab);
+    LOG(INFO) << "header_region_size_ = " << header_region_size_;
+
     LOG_ASSERT(header_region_start_);
 
     // Initialize the CacheLib MemoryAllocator.

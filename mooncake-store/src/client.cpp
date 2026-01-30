@@ -560,7 +560,7 @@ tl::expected<void, ErrorCode> Client::BatchGetWarp(
         if (!res)
             return tl::unexpected(res.error());
     }
-    
+    return {};
 }
 
 
@@ -953,8 +953,7 @@ void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, c
         }
 
         if (all_transfers_succeeded) {
-            LOG(INFO) << "All transfers completed successfully for key "
-                      << failed_key;
+            LOG(INFO) << "All transfers completed successfully for key " << failed_key;
             op->SetSuccess();
             // Transfer phase successful - continue to finalization
             // Note: Don't mark as SUCCESS yet, need to complete finalization
@@ -1068,13 +1067,12 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
         } else {
             // Check if operation completed transfers successfully and needs
             // finalization
-            if (!op->IsResolved() && !op->replicas.empty() &&
-                !op->pending_transfers.empty()) {
+            LOG(INFO) << "op->status = " << static_cast<int>(op->state);
+            if (op->IsSuccessful()) {
                 // Transfers completed, needs BatchPutEnd
                 successful_keys.emplace_back(op->key);
                 successful_indices.emplace_back(i);
-            } else if (op->state != PutOperationState::PENDING &&
-                    !op->replicas.empty()) {
+            } else {
                 // Operation failed but has allocated replicas, needs BatchPutRevoke
                 failed_keys.emplace_back(op->key);
                 failed_indices.emplace_back(i);
@@ -1145,8 +1143,8 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
                     ops[op_idx]->failure_context =
                         original_context + "; revoke also failed";
                 } else {
-                    LOG(INFO) << "Successfully revoked failed put for key "
-                              << failed_keys[i];
+                    // LOG(INFO) << "Successfully revoked failed put for key "
+                    //           << failed_keys[i];
                 }
             }
         }

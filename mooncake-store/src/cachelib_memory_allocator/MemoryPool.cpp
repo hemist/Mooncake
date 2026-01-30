@@ -21,6 +21,7 @@
 
 #include "AllocationClass.h"
 #include "SlabAllocator.h"
+#include <iostream>
 
 using namespace facebook::cachelib;
 using LockHolder = std::unique_lock<std::mutex>;
@@ -231,6 +232,7 @@ void* MemoryPool::allocate(uint32_t size) {
   // that release slab, bump down the currSlabAllocSize_ after actually
   // releasing and adding it to free list or slab allocator.
   if (allSlabsAllocated()) {
+    std::cout << "allocating  1 " << alloc << std::endl;
     return nullptr;
   }
 
@@ -248,12 +250,15 @@ void* MemoryPool::allocate(uint32_t size) {
   auto slab = getSlabLocked();
   if (slab == nullptr) {
     // out of memory
+    std::cout << "allocating  2 " << alloc << std::endl;
     return nullptr;
   }
 
   // add it to the allocation class and try to allocate.
   alloc = ac.addSlabAndAllocate(slab);
   XDCHECK_NE(nullptr, alloc);
+  if(alloc == nullptr)
+    std::cout << "allocating  3 " << alloc << std::endl;
 
   currAllocSize_ += allocSize;
   return alloc;
