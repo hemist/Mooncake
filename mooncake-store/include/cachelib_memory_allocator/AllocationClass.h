@@ -276,8 +276,8 @@ class AllocationClass {
     bool allFreed(const Slab* slab) const;
 
     // returns true if the allocation can be satisfied from the current slab.
-    bool canAllocateFromCurrentSlabLocked() const noexcept;
-    
+    bool canAllocateFromCurrentSlabLocked111() const noexcept;
+
    private:
     // check if the state of the AllocationClass is valid and if not, throws an
     // std::invalid_argument exception. This is intended for use in
@@ -288,7 +288,8 @@ class AllocationClass {
     // precondition: freeSlabs_ must not be empty.
     void setupCurrentSlabLocked();
 
-
+    // returns true if the allocation can be satisfied from the current slab.
+    bool canAllocateFromCurrentSlabLocked() const noexcept;
 
     // returns a new allocation from the current slab. Caller needs to ensure
     // that precondition canAllocateFromCurrentSlabLocked is satisfied

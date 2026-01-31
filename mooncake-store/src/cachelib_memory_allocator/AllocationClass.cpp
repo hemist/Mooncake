@@ -104,6 +104,7 @@ void* AllocationClass::allocateFromCurrentSlabLocked() noexcept {
   XDCHECK(canAllocateFromCurrentSlabLocked());
   void* ret = currSlab_->memoryAtOffset(currOffset_);
   std::cout << "allocateFromCurrentSlabLocked: " << (void*) currSlab_
+  << " slabIdx[" << slabAlloc_.slabIdx(currSlab_) << "] "
   << " at[" << currOffset_ << "] len[" << allocationSize_ << "] " << std::endl;
   currOffset_ += allocationSize_;
   return ret;
