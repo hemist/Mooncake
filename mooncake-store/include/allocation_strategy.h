@@ -177,7 +177,7 @@ class LevelAllocationStrategy : public AllocationStrategy {
 
         auto allocated_buffer = cxl_global_allocator->allocate(size);
         if (allocated_buffer) {
-            bool in_range = allocated_buffer->change_to_cxl(config.preferred_segment, cxl_size_);
+            bool in_range = allocated_buffer->change_to_cxl(config.preferred_segment, cxl_size_, config.direct_cxl_alloc);
             if (!in_range) {
                 cxl_global_allocator->deallocate(allocated_buffer.get());
                 return nullptr;

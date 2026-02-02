@@ -1258,6 +1258,7 @@ std::vector<int> DistributedObjectStore::batch_put_from_into_cxl(
     // Configure CXL as preferred storage level
     ReplicateConfig cxlconfig;
     cxlconfig.preferred_storage_level = StorageLevel::CXL;
+    cxlconfig.direct_cxl_alloc = true;
 
     LOG(INFO) << "[batch_put_from_into_cxl] Batch writing " << keys.size() 
               << " objects with preferred storage level=" 
@@ -1366,6 +1367,7 @@ int DistributedObjectStore::put_from_into_cxl(const std::string &key, void *buff
 size_t size) {
     ReplicateConfig cxlconfig;
     cxlconfig.preferred_storage_level = StorageLevel::CXL;
+    cxlconfig.direct_cxl_alloc = true;
     
     LOG(INFO) << "[put_from_into_cxl] key=" << key << ", preferred_storage_level=" << static_cast<int>(cxlconfig.preferred_storage_level);
     
@@ -2366,6 +2368,7 @@ PYBIND11_MODULE(store, m) {
                 ReplicateConfig config = ReplicateConfig{};
                 config.use_warp = true;
                 config.preferred_storage_level = use_cxl ? StorageLevel::CXL : StorageLevel::RAM;
+                config.direct_cxl_alloc = use_cxl;
 
                 py::gil_scoped_release release;
                 return self.batch_put_from_warp(keys, buffers, size, config);

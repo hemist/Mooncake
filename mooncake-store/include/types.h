@@ -259,6 +259,7 @@ struct ReplicateConfig {
     std::string preferred_segment{};  // Preferred segment for allocation
     UUID client_id{0, 0};
     StorageLevel preferred_storage_level{StorageLevel::RAM};
+    bool direct_cxl_alloc{false};
     bool use_warp{false};
 
     YLT_REFL(ReplicateConfig, 
@@ -267,6 +268,7 @@ struct ReplicateConfig {
              preferred_segment, 
              client_id, 
              preferred_storage_level,
+             direct_cxl_alloc,
              use_warp);
 
     friend std::ostream& operator<<(std::ostream& os,
@@ -277,6 +279,7 @@ struct ReplicateConfig {
                   << ", client_id: " << config.client_id 
                   << ", preferred_storage_level: " << static_cast<int>(
                        config.preferred_storage_level)
+                  << ", direct_cxl_alloc: " << config.direct_cxl_alloc
                   << ", use_warp: " << config.use_warp
                   << " }";
     }
@@ -350,7 +353,7 @@ class AllocatedBuffer {
 
     [[nodiscard]] StorageLevel get_level() const { return level; }
 
-    bool change_to_cxl(std::string client_segment_name, size_t cxl_size) {
+    bool change_to_cxl(std::string client_segment_name, size_t cxl_size, bool direct_cxl_alloc) {
         u_int64_t offset_raw = reinterpret_cast<uintptr_t>(buffer_ptr_);
         u_int64_t offset_cxl = offset_raw - DEFAULT_CXL_BASE;
         if (offset_cxl >= cxl_size) {
@@ -361,7 +364,9 @@ class AllocatedBuffer {
         buffer_ptr_ = reinterpret_cast<void*>(offset_raw - DEFAULT_CXL_BASE);
         level = StorageLevel::CXL;
         segment_name_ = client_segment_name;
-        MasterMetricManager::instance().dec_allocated_dram_size(size_);
+        if (!direct_cxl_alloc) {
+            MasterMetricManager::instance().dec_allocated_dram_size(size_);
+        }
         MasterMetricManager::instance().inc_allocated_cxl_size(size_);
         return true;
     }

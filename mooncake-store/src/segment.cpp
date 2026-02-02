@@ -23,9 +23,6 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
             segment_manager_->mounted_segments_[segment.id] = {
                 segment, SegmentStatus::OK, allocator};
 
-            MasterMetricManager::instance().inc_total_cxl_capacity(size);
-            MasterMetricManager::instance().inc_total_capacity(size);
-
             return ErrorCode::OK;
         // }
         return ErrorCode::INTERNAL_ERROR;
@@ -230,9 +227,10 @@ ErrorCode ScopedSegmentAccess::CommitUnmountSegment(
     // Remove from mounted_segments_
     segment_manager_->mounted_segments_.erase(segment_id);
 
-    // Decrease the total capacity
-    if (erased_level != StorageLevel::CXL)
-    {
+    if (erased_level != StorageLevel::CXL) {
+        // Decrease the ram capacity
+        MasterMetricManager::instance().dec_total_dram_capacity(metrics_dec_capacity);
+        // Decrease the total capacity
         MasterMetricManager::instance().dec_total_capacity(metrics_dec_capacity);
     }
 
@@ -359,6 +357,7 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
 
 void SegmentManager::initializeCxlAllocator() {
     VLOG(1) << "Init CXL global allocator.";
+    size_t cxl_size = DEFAULT_CXL_SIZE;
     // cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
     //                                             DEFAULT_CXL_PATH, 
     //                                             DEFAULT_CXL_BASE, 
@@ -367,8 +366,11 @@ void SegmentManager::initializeCxlAllocator() {
     cxl_global_allocator_ = std::make_shared<OffsetBufferAllocator>(
                                                 DEFAULT_CXL_PATH, 
                                                 DEFAULT_CXL_BASE, 
-                                                DEFAULT_CXL_SIZE);
+                                                cxl_size);
 
     allocators_.push_back(cxl_global_allocator_);
+
+    MasterMetricManager::instance().inc_total_cxl_capacity(cxl_size);
+    MasterMetricManager::instance().inc_total_capacity(cxl_size);
 }
 }  // namespace mooncake

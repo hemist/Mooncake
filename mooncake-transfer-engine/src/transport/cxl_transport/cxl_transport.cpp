@@ -218,7 +218,7 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
     // Perform the memory copy
     std::memcpy(dest, src, size);
     if (!is_read) {
-        LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, DRAM->CXL.";
+        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, DRAM->CXL.";
         // Memory barriers and cache operations
         do_clflush(dest, size);
     }
