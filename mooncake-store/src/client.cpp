@@ -1647,9 +1647,9 @@ bool validateTransferParams(
         return false;
     }
 
-    if (handles.size() != 1) {
-        LOG(WARNING) << "replica should have only one handle, but got size " << handles.size();
-    }
+    // if (handles.size() != 1) {
+    //     LOG(WARNING) << "replica should have only one handle, but got size " << handles.size();
+    // }
 
     for (size_t i = 0; i < handles.size(); ++i) {
         if (handles[i].size_ != slices[i].size) {

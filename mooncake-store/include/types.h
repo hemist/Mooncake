@@ -57,8 +57,8 @@ inline size_t get_default_cxl_size() {
     return (4ULL * 1024 * 1024 * 1024);
 }
 
-// #define DEFAULT_CXL_SIZE (get_default_cxl_size())
-#define DEFAULT_CXL_SIZE 1ULL * 1024 * 1024 * 1024
+#define DEFAULT_CXL_SIZE (get_default_cxl_size())
+// #define DEFAULT_CXL_SIZE 1ULL * 1024 * 1024 * 1024
 
 // Forward declarations
 class BufferAllocatorBase;

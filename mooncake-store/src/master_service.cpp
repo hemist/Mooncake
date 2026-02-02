@@ -542,10 +542,10 @@ auto MasterService::Remove(const std::string& key)
 
     auto& metadata = accessor.Get();
 
-    if (!metadata.IsLeaseExpired()) {
-        VLOG(1) << "key=" << key << ", error=object_has_lease";
-        return tl::make_unexpected(ErrorCode::OBJECT_HAS_LEASE);
-    }
+    // if (!metadata.IsLeaseExpired()) {
+    //     VLOG(1) << "key=" << key << ", error=object_has_lease";
+    //     return tl::make_unexpected(ErrorCode::OBJECT_HAS_LEASE);
+    // }
 
     if (auto status = metadata.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
         LOG(ERROR) << "key=" << key << ", status=" << *status

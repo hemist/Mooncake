@@ -1723,7 +1723,7 @@ DistributedObjectStore::batch_get_into_warp_internal(
             return tl::unexpected(ErrorCode::INVALID_REPLICA);
         }
 
-        LOG(INFO) << "Found " << replicas.size() << " replicas for key '" << keys[i] << "'";
+        // LOG(INFO) << "Found " << replicas.size() << " replicas for key '" << keys[i] << "'";
 
         // We only support memory replicas for now
         // TODO: Support disk replicas
