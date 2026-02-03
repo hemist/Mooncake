@@ -1016,7 +1016,7 @@ void Client::FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops, c
                     } else {
                         // Operation fully successful
                         warp_op->SetSuccess();
-                        LOG(INFO) << "Successfully completed put for key " << warp_op->keys[i];
+                        // LOG(INFO) << "Successfully completed put for key " << warp_op->keys[i];
                     }
                 }
             }

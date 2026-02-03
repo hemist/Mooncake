@@ -1215,6 +1215,7 @@ int DistributedObjectStore::batch_put_from_warp(
     const std::vector<void *> &buffers,
     size_t size, 
     const ReplicateConfig &config) {
+    LOG(INFO) << "[PUT-start] batch_put_from_warp start";
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
@@ -1231,7 +1232,12 @@ int DistributedObjectStore::batch_put_from_warp(
     }
 
     auto put_result = client_->BatchPutWarp(keys, slices, config);
-    LOG(INFO) << "End BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
+    LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
+    if (keys.size() > 1) {
+        LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
+    } else {
+        LOG(INFO) << "key: " << keys[0];
+    }
     return to_py_ret(put_result);
 }
 
@@ -1317,7 +1323,7 @@ int DistributedObjectStore::batch_get_into_warp(
 
     LOG(INFO) << "[GET-start] batch_get_into_warp start";
     int64_t rc = to_py_ret(batch_get_into_warp_internal(keys, buffers, size));
-    LOG(INFO) << "[PUT-end] batch_get_into_warp end";
+    LOG(INFO) << "[GET-end] batch_get_into_warp end";
     return rc;
 }
 
