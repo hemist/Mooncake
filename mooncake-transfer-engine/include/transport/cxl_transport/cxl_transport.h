@@ -59,6 +59,8 @@ class CxlTransport : public Transport {
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status) override;
 
+    void cudaDefaultStreamSynchronize();
+
     void* getCxlBaseAddr() { return cxl_base_addr; }
 
    private:

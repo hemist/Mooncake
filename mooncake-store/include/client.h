@@ -106,7 +106,8 @@ class Client {
     std::vector<tl::expected<void, ErrorCode>> BatchGet(
         const std::vector<std::string>& object_keys,
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
-        std::unordered_map<std::string, std::vector<Slice>>& slices);
+        std::unordered_map<std::string, std::vector<Slice>>& slices,
+        bool use_warp = false);
 
     /**
      * @brief Transfers data using pre-queried object information

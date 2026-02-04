@@ -57,6 +57,8 @@ class MultiTransport {
 
     std::vector<Transport *> listTransports();
 
+    void cudaDefaultStreamSynchronize();
+
     void *getBaseAddr();
 
    private:

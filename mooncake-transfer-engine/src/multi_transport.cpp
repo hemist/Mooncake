@@ -284,6 +284,16 @@ std::vector<Transport *> MultiTransport::listTransports() {
     return transport_list;
 }
 
+void MultiTransport::cudaDefaultStreamSynchronize() {
+#ifdef USE_CXL
+    Transport *transport = getTransport("cxl");
+    if (transport) {
+        auto* cxl_transport = dynamic_cast<CxlTransport*>(transport);
+        cxl_transport->cudaDefaultStreamSynchronize();
+    }
+#endif
+}
+
 void *MultiTransport::getBaseAddr() {
 #ifdef USE_CXL
     Transport *transport = getTransport("cxl");

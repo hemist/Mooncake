@@ -219,6 +219,10 @@ class TransferEngine {
         return metadata_->syncSegmentCache(segment_name);
     }
 
+    void cudaDefaultStreamSynchronize() {
+        multi_transports_->cudaDefaultStreamSynchronize();
+    }
+
     void *getBaseAddr() {
         return multi_transports_->getBaseAddr();
     }

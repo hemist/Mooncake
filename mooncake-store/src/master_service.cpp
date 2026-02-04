@@ -365,13 +365,13 @@ auto MasterService::PutStart(const std::string& key,
     // Validate slice lengths
     uint64_t total_length = 0;
     for (size_t i = 0; i < slice_lengths.size(); ++i) {
-        if (slice_lengths[i] > kMaxSliceSize) {
-            LOG(ERROR) << "key=" << key << ", slice_index=" << i
-                       << ", slice_size=" << slice_lengths[i]
-                       << ", max_size=" << kMaxSliceSize
-                       << ", error=invalid_slice_size";
-            return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
-        }
+        // if (slice_lengths[i] > kMaxSliceSize) {
+        //     LOG(ERROR) << "key=" << key << ", slice_index=" << i
+        //                << ", slice_size=" << slice_lengths[i]
+        //                << ", max_size=" << kMaxSliceSize
+        //                << ", error=invalid_slice_size";
+        //     return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
+        // }
         total_length += slice_lengths[i];
     }
 
@@ -551,6 +551,13 @@ auto MasterService::Remove(const std::string& key)
         LOG(ERROR) << "key=" << key << ", status=" << *status
                    << ", error=invalid_replica_status";
         return tl::make_unexpected(ErrorCode::REPLICA_IS_NOT_READY);
+    }
+
+    StorageLevel storage_level = metadata.get_storage_level();
+    if (storage_level == StorageLevel::RAM) {
+        MasterMetricManager::instance().dec_allocated_dram_size(metadata.size);
+    } else if (storage_level == StorageLevel::CXL) {
+        MasterMetricManager::instance().dec_allocated_cxl_size(metadata.size);
     }
 
     // Remove object metadata

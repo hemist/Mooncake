@@ -397,7 +397,8 @@ tl::expected<void, ErrorCode> Client::Get(
 std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     const std::vector<std::string>& object_keys,
     const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
-    std::unordered_map<std::string, std::vector<Slice>>& slices) {
+    std::unordered_map<std::string, std::vector<Slice>>& slices,
+    bool use_warp) {
     CHECK(transfer_submitter_) << "TransferSubmitter not initialized";
 
     // Validate input size consistency
@@ -460,17 +461,23 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     }
 
     // Wait for all transfers to complete
+    bool all_success = true;
     for (auto& [index, key, future] : pending_transfers) {
         ErrorCode result = future.get();
         if (result != ErrorCode::OK) {
             LOG(ERROR) << "Transfer failed for key: " << key
                        << " with error: " << static_cast<int>(result);
             results[index] = tl::unexpected(result);
+            all_success = false;
         } else {
             VLOG(1) << "Transfer completed successfully for key: " << key;
             results[index] = {};
             transfer_submitter_->receive(future);
         }
+    }
+
+    if (all_success && use_warp) {
+        transfer_engine_.cudaDefaultStreamSynchronize();
     }
 
     LOG(INFO) << "BatchGet Parallel Submit End";
@@ -555,7 +562,7 @@ tl::expected<void, ErrorCode> Client::BatchGetWarp(
     
     auto res_list = use_cuda_kernel ? 
                     BatchGetCxl(object_keys, replica_lists, slices): 
-                    BatchGet(object_keys, replica_lists, slices);
+                    BatchGet(object_keys, replica_lists, slices, true);
     for (auto& res : res_list) {
         if (!res)
             return tl::unexpected(res.error());
@@ -913,6 +920,7 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
 
 void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, const ReplicateConfig& config) {
     bool use_warp = config.use_warp;
+    bool use_cxl = config.preferred_storage_level == StorageLevel::CXL;
 
     for (auto& op : ops) {
         // Skip operations that already failed or completed
@@ -955,6 +963,10 @@ void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, c
         if (all_transfers_succeeded) {
             LOG(INFO) << "All transfers completed successfully for key " << failed_key;
             op->SetSuccess();
+
+            if (use_cxl && use_warp) {
+                transfer_engine_.cudaDefaultStreamSynchronize();
+            }
             // Transfer phase successful - continue to finalization
             // Note: Don't mark as SUCCESS yet, need to complete finalization
         } else {

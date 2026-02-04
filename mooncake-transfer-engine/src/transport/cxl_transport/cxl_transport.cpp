@@ -189,7 +189,7 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
 
         // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyDeviceToHost, 0));
-        CUDA_CHECK(cudaDeviceSynchronize());
+        // CUDA_CHECK(cudaStreamSynchronize(0));
         return 0;
     } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
         // dest is VRAM, src is CXL, Opcode is TransferRequest::WRITE, CXL->VRAM
@@ -199,7 +199,7 @@ int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
 
         // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyHostToDevice, 0));
-        CUDA_CHECK(cudaDeviceSynchronize());
+        // CUDA_CHECK(cudaStreamSynchronize(0));
         return 0;
     } else {
         LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM. src=" << src << ", dest=" << dest << ", size=" << size 
@@ -621,6 +621,10 @@ Status CxlTransport::submitTransferTaskNormal(
             slice->markSuccess();
     }
     return Status::OK();
+}
+
+void CxlTransport::cudaDefaultStreamSynchronize() {
+    CUDA_CHECK(cudaStreamSynchronize(0));
 }
 
 }  // namespace mooncake
