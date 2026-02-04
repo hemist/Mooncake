@@ -1233,7 +1233,11 @@ int DistributedObjectStore::batch_put_from_warp(
 
     auto put_result = client_->BatchPutWarp(keys, slices, config);
     LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
-    LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
+    if (keys.size() > 1) {
+        LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
+    } else {
+        LOG(INFO) << "key: " << keys[0];
+    }
     return to_py_ret(put_result);
 }
 
