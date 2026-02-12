@@ -32,6 +32,7 @@ MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
       enable_ha_(enable_ha),
       cluster_id_(cluster_id),
       segment_manager_(memory_allocator, enable_cxl),
+      memory_allocator_(memory_allocator),
       enable_cxl_(enable_cxl),
       master_mq_service_(std::make_shared<MasterMQService>()) {
     if (eviction_ratio_ < 0.0 || eviction_ratio_ > 1.0) {
@@ -365,19 +366,16 @@ auto MasterService::PutStart(const std::string& key,
     // Validate slice lengths
     uint64_t total_length = 0;
     for (size_t i = 0; i < slice_lengths.size(); ++i) {
-        // if (slice_lengths[i] > kMaxSliceSize) {
-        //     LOG(ERROR) << "key=" << key << ", slice_index=" << i
-        //                << ", slice_size=" << slice_lengths[i]
-        //                << ", max_size=" << kMaxSliceSize
-        //                << ", error=invalid_slice_size";
-        //     return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
-        // }
+        if (memory_allocator_ == BufferAllocatorType::CACHELIB && 
+            slice_lengths[i] > kMaxSliceSize) {
+            LOG(ERROR) << "key=" << key << ", slice_index=" << i
+                       << ", slice_size=" << slice_lengths[i]
+                       << ", max_size=" << kMaxSliceSize
+                       << ", error=invalid_slice_size";
+            return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
+        }
         total_length += slice_lengths[i];
     }
-
-    // LOG(INFO) << "key=" << key << ", value_length=" << total_length
-    //         << ", slice_count=" << slice_lengths.size() << ", config=" << config
-    //         << ", action=put_start_begin";
 
     // Lock the shard and check if object already exists
     size_t shard_idx = getShardIndex(key);
@@ -687,7 +685,8 @@ auto MasterService::MigrateStart(const std::string& key,
     // Validate slice lengths
     uint64_t total_length = 0;
     for (size_t i = 0; i < slice_lengths.size(); ++i) {
-        if (slice_lengths[i] > kMaxSliceSize) {
+        if (memory_allocator_ == BufferAllocatorType::CACHELIB && 
+            slice_lengths[i] > kMaxSliceSize) {
             LOG(ERROR) << "key=" << key << ", slice_index=" << i
                        << ", slice_size=" << slice_lengths[i]
                        << ", max_size=" << kMaxSliceSize

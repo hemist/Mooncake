@@ -2268,6 +2268,11 @@ PYBIND11_MODULE(store, m) {
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
                bool use_cxl) {
+                if (!use_cxl) {
+                    LOG(ERROR) << "BatchGetWarp only support cxl storage level for now.";
+                    return static_cast<int>(ErrorCode::INVALID_PARAMS);
+                }
+
                 std::vector<void *> buffers;
                 buffers.reserve(buffer_ptrs.size());
                 for (uintptr_t ptr : buffer_ptrs) {
@@ -2366,6 +2371,11 @@ PYBIND11_MODULE(store, m) {
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
                bool use_cxl) {
+                if (!use_cxl) {
+                    LOG(ERROR) << "BatchPutWarp only support cxl storage level for now.";
+                    return static_cast<int>(ErrorCode::INVALID_PARAMS);
+                }
+
                 std::vector<void *> buffers;
                 buffers.reserve(buffer_ptrs.size());
                 for (uintptr_t ptr : buffer_ptrs) {

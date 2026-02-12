@@ -507,6 +507,7 @@ class MasterService {
 
     // Segment management
     SegmentManager segment_manager_;
+    BufferAllocatorType memory_allocator_;
     std::shared_ptr<AllocationStrategy> allocation_strategy_;
 
     // cxl storage controller
