@@ -105,7 +105,7 @@ void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
         if (is_cxl) {
             MasterMetricManager::instance().dec_allocated_cxl_size(freed_size);
         } else {
-            MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
+            //MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
         }
         VLOG(1) << "deallocation_succeeded address=" << handle->buffer_ptr_
                 << " size=" << freed_size << " segment=" << segment_name_;

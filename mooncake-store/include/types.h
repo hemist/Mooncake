@@ -452,6 +452,10 @@ class Replica {
                            });
     }
 
+    void reset_status() {
+        status_ = ReplicaStatus::PROCESSING;
+    }
+
     void mark_complete() {
         if (status_ == ReplicaStatus::PROCESSING) {
             status_ = ReplicaStatus::COMPLETE;

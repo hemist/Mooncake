@@ -138,6 +138,9 @@ class MasterService {
         void SetEvicted() {
             this->can_be_evicted = false;
         }
+        void ResetEvictState() {
+            this->can_be_evicted = true;
+        }
 
         // Check if the lease has expired
         bool IsLeaseExpired() const {
@@ -396,7 +399,7 @@ class MasterService {
     // evict ratio target. If the actual evicted ratio is less than
     // evict_ratio_lowerbound, the second pass will be triggered and try to
     // fulfill evict ratio lowerbound.
-    void BatchEvict(double evict_ratio_target, double evict_ratio_lowerbound);
+    void BatchEvict(double evict_ratio_target, double evict_ratio_lowerbound, StorageLevel target_storage_level);
 
     // Clear invalid handles in all shards
     void ClearInvalidHandles();

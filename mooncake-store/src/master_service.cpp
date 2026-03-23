@@ -392,6 +392,7 @@ auto MasterService::PutStart(const std::string& key,
         // recover the object that is already exists
         std::vector<Replica::Descriptor> replica_list;
         for (auto& replica : it->second.replicas) {
+            replica.reset_status();
             replica_list.emplace_back(replica.get_descriptor());
         }
         return replica_list;
@@ -469,7 +470,7 @@ auto MasterService::PutStart(const std::string& key,
     metadata_shards_[shard_idx].metadata.emplace(
         std::piecewise_construct, 
         std::forward_as_tuple(key),
-        std::forward_as_tuple(total_length, std::move(replicas), client_config.with_soft_pin, client_config.preferred_storage_level == StorageLevel::RAM)        
+        std::forward_as_tuple(total_length, std::move(replicas), client_config.with_soft_pin)
     );
     return replica_list;
 }
@@ -802,8 +803,8 @@ auto MasterService::MigrateEnd(const std::string& key,
             }
         } else {
             if (replica.get_descriptor().storage_level == StorageLevel::RAM) {
-                total_ram_size += replica.get_size();
-                MasterMetricManager::instance().dec_allocated_dram_size(replica.get_size());
+                total_ram_size += metadata.size * replica.get_size();
+                //MasterMetricManager::instance().dec_allocated_dram_size(metadata.size * replica.get_size());
             }
         }
     }
@@ -829,6 +830,7 @@ auto MasterService::MigrateEnd(const std::string& key,
     // at beginning. 2. If this object has soft pin enabled, set it to be soft
     // pinned.
     metadata.GrantLease(0, default_kv_soft_pin_ttl_);
+    metadata.ResetEvictState();
     return {};
 }
 
@@ -887,6 +889,21 @@ void MasterService::GCThreadFunc() {
         }
         std::vector<double> used_ratios =
             MasterMetricManager::instance().get_global_used_ratio();
+
+        // CXL eviction path: 1= cxl ratio, 2= ram remain ratio
+        if (enable_cxl_ && used_ratios[1] > eviction_high_watermark_ratio_) {
+            double evict_ratio_target = std::max(
+                eviction_ratio_,
+                used_ratios[1] - eviction_high_watermark_ratio_ + eviction_ratio_);
+            double evict_ratio_lowerbound =
+                std::max(evict_ratio_target * 0.5,
+                         used_ratios[1] - eviction_high_watermark_ratio_);
+            LOG(WARNING) << "CXL ratio: " << used_ratios[1]
+                         << ", high watermark: " << eviction_high_watermark_ratio_
+                         << ", action=start_cxl_eviction";
+            BatchEvict(evict_ratio_target, evict_ratio_lowerbound, StorageLevel::CXL);
+        }
+
         if (used_ratios[2] > eviction_high_watermark_ratio_) {
             double evict_ratio_target = std::max(
                 eviction_ratio_,
@@ -894,8 +911,8 @@ void MasterService::GCThreadFunc() {
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
                          used_ratios[2] - eviction_high_watermark_ratio_);
-            LOG(WARNING) << "Ratio: " << used_ratios[0] << ", Actual ratio: " << used_ratios[2] << ". Start eviction ";
-            BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
+            LOG(WARNING) << "RAM Ratio: " << used_ratios[0] << ", Actual ratio: " << used_ratios[2] << ". Start eviction ";
+            BatchEvict(evict_ratio_target, evict_ratio_lowerbound, StorageLevel::RAM);
         }
 
         std::this_thread::sleep_for(
@@ -911,7 +928,13 @@ void MasterService::GCThreadFunc() {
 }
 
 void MasterService::BatchEvict(double evict_ratio_target,
-                               double evict_ratio_lowerbound) {
+                               double evict_ratio_lowerbound,
+                               StorageLevel target_storage_level) {
+    if (target_storage_level != StorageLevel::CXL && target_storage_level != StorageLevel::RAM) {
+        LOG(ERROR) << "target_storage_level=" << target_storage_level
+                   << ", error=invalid_params";
+        return;
+    }
     if (evict_ratio_target < evict_ratio_lowerbound) {
         LOG(ERROR) << "evict_ratio_target=" << evict_ratio_target
                    << ", evict_ratio_lowerbound=" << evict_ratio_lowerbound
@@ -939,7 +962,12 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         // object_count must be updated at beginning as it will be used later
         // to compute ideal_evict_num
-        object_count += shard.metadata.size();
+        //object_count += shard.metadata.size();
+        for (auto it = shard.metadata.begin(); it != shard.metadata.end(); it++) {
+            if (it->second.get_storage_level() == target_storage_level) {
+                object_count += 1;
+            }
+        }
 
         // To achieve evicted_count / object_count = evict_ratio_target,
         // ideally how many object should be evicted in this shard
@@ -947,6 +975,9 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         std::vector<std::chrono::steady_clock::time_point> candidates;  // can be removed
         for (auto it = shard.metadata.begin(); it != shard.metadata.end(); it++) {
+            if (it->second.get_storage_level() != target_storage_level) {
+                continue;
+            }
             if (!it->second.CanBeEvicted()) {
                 continue;
             }
@@ -985,6 +1016,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
             while (it != shard.metadata.end()) {
                 // Skip objects that are not allowed to be evicted in the first pass
                 if (!it->second.CanBeEvicted() ||
+                    it->second.get_storage_level() != target_storage_level ||
                     !it->second.IsLeaseExpired(now) ||
                     it->second.IsSoftPinned(now) ||
                     it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
@@ -994,10 +1026,13 @@ void MasterService::BatchEvict(double evict_ratio_target,
                 if (it->second.lease_timeout <= target_timeout) {
                     // Evict this object
                     total_freed_size += it->second.size * it->second.replicas.size();
-                    // it = shard.metadata.erase(it);
-                    PushMasterMQ(it);
-                    it->second.SetEvicted();
-                    ++it;
+                    if (it->second.get_storage_level() == StorageLevel::CXL) {
+                        it = shard.metadata.erase(it);
+                    } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                        PushMasterMQ(it);
+                        it->second.SetEvicted();
+                        ++it;
+                    }
                     shard_evicted_count++;
                 } else {
                     // second pass candidates
@@ -1042,7 +1077,8 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
                 auto it = shard.metadata.begin();
                 while (it != shard.metadata.end() && target_evict_num > 0) {
-                    if (!it->second.CanBeEvicted()) {
+                    if (!it->second.CanBeEvicted() ||
+                        it->second.get_storage_level() != target_storage_level) {
                         ++it;
                         continue;
                     }
@@ -1051,11 +1087,15 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         !it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         // Evict this object
                         total_freed_size += it->second.size * it->second.replicas.size();
-                        // it = shard.metadata.erase(it);
-                        LOG(ERROR) << "PushMasterMQ(it) 2";
-                        PushMasterMQ(it);
-                        it->second.SetEvicted();
-                        ++it;
+                        if (it->second.get_storage_level() == StorageLevel::CXL) {
+                            LOG(ERROR) << "CXL evict 2:" << it->first;
+                            it = shard.metadata.erase(it);
+                        } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                            LOG(ERROR) << "PushMasterMQ(it) 2";
+                            PushMasterMQ(it);
+                            it->second.SetEvicted();
+                            ++it;
+                        }
                         evicted_count++;
                         target_evict_num--;
                     } else {
@@ -1090,6 +1130,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
                     // Skip objects that are not expired or have incomplete
                     // replicas
                     if (!it->second.CanBeEvicted() ||
+                        it->second.get_storage_level() != target_storage_level ||
                         !it->second.IsLeaseExpired(now) ||
                         it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         ++it;
@@ -1101,11 +1142,15 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         it->second.lease_timeout <= soft_target_timeout) {
                         total_freed_size +=
                             it->second.size * it->second.replicas.size();
-                        // it = shard.metadata.erase(it);
-                        LOG(ERROR) << "PushMasterMQ(it) 3";
-                        PushMasterMQ(it);
-                        it->second.SetEvicted();
-                        ++it;
+                        if (it->second.get_storage_level() == StorageLevel::CXL) {
+                            LOG(ERROR) << "CXL evict 3:" << it->first;
+                            it = shard.metadata.erase(it);
+                        } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                            LOG(ERROR) << "PushMasterMQ(it) 3";
+                            PushMasterMQ(it);
+                            it->second.SetEvicted();
+                            ++it;
+                        }
                         evicted_count++;
                         target_evict_num--;
                     } else {
@@ -1120,6 +1165,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
                        << ", no_pin_objects.size()=" << no_pin_objects.size()
                        << ", soft_pin_objects.size()="
                        << soft_pin_objects.size()
+                       << ", target_storage_level=" << target_storage_level
                        << ", evicted_count=" << evicted_count
                        << ", object_count=" << object_count
                        << ", evict_ratio_target=" << evict_ratio_target
@@ -1127,20 +1173,26 @@ void MasterService::BatchEvict(double evict_ratio_target,
         }
     }
 
-    MasterMetricManager::instance().inc_degraded_queue_size(total_freed_size);
+    if (target_storage_level == StorageLevel::CXL) {
+        MasterMetricManager::instance().dec_allocated_cxl_size(total_freed_size);
+    } else if (target_storage_level == StorageLevel::RAM) {
+        MasterMetricManager::instance().inc_degraded_queue_size(total_freed_size);
+    }
 
-    // if (evicted_count > 0) {
-    //     MasterMetricManager::instance().inc_eviction_success(evicted_count,
-    //                                                          total_freed_size);
-    // } else {
-    //     if (object_count == 0) {
-    //         // No objects to evict, no need to check again
-    //     }
-    //     MasterMetricManager::instance().inc_eviction_fail();
-    // }
-    VLOG(1) << "action=evict_objects"
-            << ", evicted_count=" << evicted_count
-            << ", total_freed_size=" << total_freed_size;
+    if (evicted_count > 0) {
+        MasterMetricManager::instance().inc_eviction_success(evicted_count,
+                                                             total_freed_size);
+    } else {
+        if (object_count == 0) {
+            // No objects to evict, no need to check again
+        }
+        MasterMetricManager::instance().inc_eviction_fail();
+    }
+    if (evicted_count > 0) {
+        LOG(INFO) << "Evicted " << evicted_count << " objects from "
+                  << (target_storage_level == StorageLevel::CXL ? "CXL" : "RAM")
+                  << " to free up " << total_freed_size << " bytes";
+    }
 }
 
 void MasterService::ClientMonitorFunc() {
