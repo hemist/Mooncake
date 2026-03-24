@@ -102,6 +102,7 @@ class CxlTransport : public Transport {
     void* cxl_base_addr;
     size_t cxl_dev_size;
     char* cxl_dev_path;
+    size_t cxl_dev_offset;
 };
 }  // namespace mooncake
 
