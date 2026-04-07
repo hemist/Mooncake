@@ -96,10 +96,13 @@ CxlTransport::CxlTransport() {
 
     LOG(INFO) << "MC_CXL_DEV_PATH: " << env_cxl_dev_path << ", MC_CXL_DEV_OFFSET: "<< env_cxl_dev_offset;
 
+    cxl_dev_offset = 0;
     if (env_cxl_dev_path) {
         cxl_dev_path = (char *) env_cxl_dev_path;
         cxl_dev_size = cxlGetDeviceSize();
-        cxl_dev_offset = env_cxl_dev_offset ? atoi(env_cxl_dev_offset) : 0;
+        if (env_cxl_dev_offset) {
+            cxl_dev_offset = atoi(env_cxl_dev_offset);
+        }
     }
 }
 
@@ -271,7 +274,8 @@ int CxlTransport::cxlDevInit()
         return -1;
     }
 
-    void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, cxl_dev_offset);
+    size_t offset_bk = 1 * 1024 * 1024 * 1024;
+    void* ptr = mmap(NULL, cxl_dev_size + offset_bk, PROT_READ | PROT_WRITE, MAP_SHARED, fd, cxl_dev_offset);
     // LOG(INFO) << "CxlTransport: use normal mmap.";
     LOG(INFO) << "CxlTransport: use mmap, size:" << cxl_dev_size/1024/1024/1024 << "GB";
     if (ptr == MAP_FAILED) {
@@ -279,9 +283,9 @@ int CxlTransport::cxlDevInit()
         return ERR_MEMORY;
     }
     // DSA copy requires that memory has already undergone page faults
-    memset((char*)ptr, 0, cxl_dev_size);
+    memset((char*)ptr + offset_bk, 0, cxl_dev_size);
     // LOG(INFO) << "Memset dsa base addrs";
-    cxl_base_addr = ptr;
+    cxl_base_addr = ptr + offset_bk;
     close(fd);
 
 #ifdef USE_CXL_CUDA
