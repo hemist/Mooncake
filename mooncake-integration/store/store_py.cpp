@@ -1651,7 +1651,7 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
             .total_size = total_size
         });
 
-        results.emplace_back(static_cast<int64_t>(total_size));
+        results.emplace_back(static_cast<int64_t>(0));
     }
 
     if (valid_operations.empty()) {
