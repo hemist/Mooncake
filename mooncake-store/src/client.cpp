@@ -1471,6 +1471,18 @@ tl::expected<bool, ErrorCode> Client::IsExist(const std::string& key) {
     return result.value();
 }
 
+tl::expected<std::string, ErrorCode> Client::cxlChannelHandshake() {
+    return master_client_.cxlChannelHandshake();
+}
+tl::expected<bool, ErrorCode> Client::CreateCxlChannelRpcClient(
+        const std::string& master_server_addr) {
+    return master_client_.CreateCxlChannelRpcClient(master_server_addr);
+}
+
+tl::expected<bool, ErrorCode> Client::ResetCxlChannelRpcClient() {
+    return master_client_.ResetCxlChannelRpcClient();
+}
+
 std::vector<tl::expected<bool, ErrorCode>> Client::BatchIsExist(
     const std::vector<std::string>& keys) {
     auto response = master_client_.BatchExistKey(keys);

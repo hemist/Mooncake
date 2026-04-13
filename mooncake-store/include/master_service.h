@@ -2,6 +2,9 @@
 
 #include <atomic>
 #include <boost/functional/hash.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <boost/lockfree/queue.hpp>
 #include <chrono>
 #include <cstdint>
@@ -22,6 +25,11 @@
 #include "segment.h"
 #include "types.h"
 #include "master_mq_service.h"
+
+#if defined(STORE_USE_CXL_CHANNEL)
+#include "cxl_shm/message_queue.h"
+#include "cxl_rpc_protocol.h"
+#endif
 
 namespace mooncake {
 // Forward declarations
@@ -223,6 +231,12 @@ class MasterService {
      */
     auto ExistKey(const std::string& key) -> tl::expected<bool, ErrorCode>;
 
+    /**
+     * @brief CXL channel handshake, generate and return a UUID string
+     * @return UUID string on success, error otherwise
+     */
+    auto cxlChannelHandshake() -> tl::expected<std::string, ErrorCode>;
+
     std::vector<tl::expected<bool, ErrorCode>> BatchExistKey(
         const std::vector<std::string>& keys);
 
@@ -388,6 +402,9 @@ class MasterService {
     }
 
    private:
+    // CXL channel message deal function
+    bool CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response);
+
     // GC thread function
     void GCThreadFunc();
 

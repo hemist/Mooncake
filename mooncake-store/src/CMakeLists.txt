@@ -41,6 +41,19 @@ add_library(mooncake_store ${MOONCAKE_STORE_SOURCES})
 target_link_libraries(mooncake_store PUBLIC transfer_engine ${ETCD_WRAPPER_LIB} glog::glog gflags::gflags  
     ${EXTRA_LIBS}
 )
+
+if (STORE_USE_CXL_CHANNEL)
+    target_compile_definitions(mooncake_store PUBLIC STORE_USE_CXL_CHANNEL=1)
+    find_library(CXL_SHM_LIB
+        NAMES libcxl_shm_lib.so
+        PATHS /usr/local/lib /usr/lib
+        NO_DEFAULT_PATH
+    )
+    if (NOT CXL_SHM_LIB)
+        message(FATAL_ERROR "cxl_shm library libcxl_shm_lib.so not found in /usr/local/lib or /usr/lib")
+    endif()
+    target_link_libraries(mooncake_store PUBLIC ${CXL_SHM_LIB})
+endif()
 if (STORE_USE_ETCD)
     add_dependencies(mooncake_store build_etcd_wrapper)
 endif()

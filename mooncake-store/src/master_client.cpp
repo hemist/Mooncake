@@ -13,8 +13,21 @@
 #include "rpc_service.h"
 #include "types.h"
 #include "utils/scoped_vlog_timer.h"
+#include "cxl_rpc_protocol.h"
 
 namespace mooncake {
+
+// 防止编译器优化的辅助函数
+// 使用 asm volatile 阻止编译器消除看似无用的代码
+template<typename T>
+inline void do_not_optimize(const T& value) {
+    asm volatile("" : : "g"(value) : "memory");
+}
+
+template<typename T>
+inline void force_read(T& value) {
+    asm volatile("" : "+r"(value) : : "memory");
+}
 
 using namespace coro_rpc;
 using namespace async_simple::coro;
@@ -61,13 +74,115 @@ tl::expected<bool, ErrorCode> MasterClient::ExistKey(
     ScopedVLogTimer timer(1, "MasterClient::ExistKey");
     timer.LogRequest("object_key=", object_key);
 
+    std::cout << "MasterClient::ExistKey: " << object_key << std::endl;;
+    // #undef STORE_USE_CXL_CHANNEL
+#if defined(STORE_USE_CXL_CHANNEL)
+    #if 0
+    std::cout << "MasterClient::ExistKey CXL path" << std::endl;;
+    auto channel = cxl_channel_accessor_.GetChannel();
+    if (channel) {
+        char data[STORE_CXL_CHANNEL_MSG_SIZE] = "12345678";
+        for (int i = 0; i < 2; i++) {
+            // 测量 Send 时间
+            auto send_start = std::chrono::steady_clock::now();
+            auto send_result = channel->Send(data, 128);
+            auto send_end = std::chrono::steady_clock::now();
+            auto send_latency = std::chrono::duration_cast<std::chrono::microseconds>(send_end - send_start);
+            
+            // 测量 Recv 时间
+            auto recv_start = std::chrono::steady_clock::now();
+            auto recv_result = channel->Recv(data, 128);
+            auto recv_end = std::chrono::steady_clock::now();
+            auto recv_latency = std::chrono::duration_cast<std::chrono::microseconds>(recv_end - recv_start);
+            
+            // 计算总延迟
+            auto total_latency = std::chrono::duration_cast<std::chrono::microseconds>(recv_end - send_start);
+            
+            std::cout << "MasterClient::ExistKey CXL path success, "
+                      << "send=" << send_latency.count() << "us, "
+                      << "recv=" << recv_latency.count() << "us, "
+                      << "total=" << total_latency.count() << "us" << std::endl;
+
+            auto cxl_send2 = std::chrono::steady_clock::now();
+            CxlChannelRpcRequest req;
+            req.op = CxlChannelRpcOp::ExistKey;
+            req.key = object_key;
+            std::string req_str = req.serialize();
+            auto deserialized_req = CxlChannelRpcRequest::deserialize(req_str);
+            
+            // 使用 do_not_optimize 防止编译器优化掉序列化和反序列化操作
+            do_not_optimize(req_str);
+            do_not_optimize(deserialized_req);
+
+            CxlChannelRpcResponse resp;
+            resp.status = CxlChannelRpcStatus::Success;
+            resp.error_code = 0;
+            resp.exist = true;
+            std::string response_str = resp.serialize();
+            auto deserialized_resp = CxlChannelRpcResponse::deserialize(response_str);
+            
+            // 使用 do_not_optimize 防止编译器优化掉序列化和反序列化操作
+            do_not_optimize(response_str);
+            do_not_optimize(deserialized_resp);
+
+            auto cxl_recv2 = std::chrono::steady_clock::now();
+            auto cxl_latency2 = std::chrono::duration_cast<std::chrono::microseconds>(cxl_recv2 - cxl_send2);
+            
+            std::cout << "MasterClient::ExistKey CXL path success, serialize latency=" << cxl_latency2.count() << "us" 
+                      << ", req_size=" << req_str.size() << ", resp_size=" << response_str.size() << std::endl;
+        }
+
+
+        return true;
+    }
+    #endif
+
+    std::cout << "MasterClient::ExistKey CXL path" << std::endl;
+    auto channel = cxl_channel_accessor_.GetChannel();
+    if (channel) {
+        auto cxl_start = std::chrono::steady_clock::now();
+        CxlChannelRpcRequest req;
+        req.op = CxlChannelRpcOp::ExistKey;
+        req.key = object_key;
+        std::string req_str = req.serialize();
+        auto send_result = channel->Send(req_str.data(), req_str.size());
+        if (!send_result.has_value()) {
+            LOG(ERROR) << "CXL Send failed";
+            return tl::unexpected(ErrorCode::RPC_FAIL);
+        }
+        char resp_buf[STORE_CXL_CHANNEL_MSG_SIZE] = {0};
+        auto recv_result = channel->Recv(resp_buf, STORE_CXL_CHANNEL_MSG_SIZE);
+        if (!recv_result.has_value()) {
+            LOG(ERROR) << "CXL Recv failed";
+            return tl::unexpected(ErrorCode::RPC_FAIL);
+        }
+        CxlChannelRpcResponse resp = CxlChannelRpcResponse::deserialize(std::string(resp_buf, recv_result.value()));
+        auto cxl_end = std::chrono::steady_clock::now();
+        auto cxl_latency = std::chrono::duration_cast<std::chrono::microseconds>(cxl_end - cxl_start);
+        
+        if (resp.status != CxlChannelRpcStatus::Success) {
+            VLOG(1) << "MasterClient::ExistKey CXL path failed"
+                    << ", latency=" << cxl_latency.count() << "us";
+            return tl::unexpected(static_cast<ErrorCode>(resp.error_code));
+        }
+        std::cout << "MasterClient::ExistKey CXL path success"
+                    << ", latency=" << cxl_latency.count() << "us" 
+                    << ", exist=" << resp.exist << std::endl;
+        return resp.exist;
+    }
+
+#endif
+    // coro rpc client path
+    std::cout << "MasterClient::ExistKey http path" << std::endl;
+    auto rpc_start = std::chrono::steady_clock::now();
     auto client = client_accessor_.GetClient();
     if (!client) {
         LOG(ERROR) << "Client not available";
-        timer.LogResponse("error=Client not available");
+        auto rpc_end = std::chrono::steady_clock::now();
+        auto rpc_latency = std::chrono::duration_cast<std::chrono::microseconds>(rpc_end - rpc_start);
+        VLOG(1) << "MasterClient::ExistKey RPC path failed: error=Client not available, latency=" << rpc_latency.count() << "us";
         return tl::unexpected(ErrorCode::RPC_FAIL);
     }
-
     auto request_result =
         client->send_request<&WrappedMasterService::ExistKey>(object_key);
     auto result =
@@ -80,9 +195,121 @@ tl::expected<bool, ErrorCode> MasterClient::ExistKey(
             }
             co_return result->result();
         }());
+    
+    auto rpc_end = std::chrono::steady_clock::now();
+    auto rpc_latency = std::chrono::duration_cast<std::chrono::microseconds>(rpc_end - rpc_start);
+    
+    if (!result) {
+        VLOG(1) << "MasterClient::ExistKey RPC path failed" 
+                << ", latency=" << rpc_latency.count() << "us";
+    } else {
+        std::cout << "MasterClient::ExistKey RPC path success"
+                << ", latency=" << rpc_latency.count() << "us";
+    }
+    return result;
+}
+
+tl::expected<std::string, ErrorCode> MasterClient::cxlChannelHandshake() {
+    ScopedVLogTimer timer(1, "MasterClient::cxlChannelHandshake");
+    timer.LogRequest("action=handshake");
+
+    auto client = client_accessor_.GetClient();
+    if (!client) {
+        LOG(ERROR) << "Client not available";
+        timer.LogResponse("error=Client not available");
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    auto request_result =
+        client->send_request<&WrappedMasterService::cxlChannelHandshake>();
+    auto result =
+        coro::syncAwait([&]() -> coro::Lazy<tl::expected<std::string, ErrorCode>> {
+            auto result = co_await co_await request_result;
+            if (!result) {
+                LOG(ERROR) << "Failed to perform handshake: "
+                           << result.error().msg;
+                co_return tl::make_unexpected(ErrorCode::RPC_FAIL);
+            }
+            co_return result->result();
+        }());
 
     timer.LogResponseExpected(result);
     return result;
+}
+
+tl::expected<bool, ErrorCode> MasterClient::CreateCxlChannelRpcClient(const std::string& master_server_addr) {
+#if defined(STORE_USE_CXL_CHANNEL)
+    LOG(INFO) << "beginning to initialize cxl channel ...";
+    auto channel_name_result = cxlChannelHandshake();
+    if (!channel_name_result) {
+        LOG(ERROR) << "Failed to get cxl channel name: " << toString(channel_name_result.error());
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    LOG(INFO) << "cxl channel name: " << *channel_name_result;
+    auto channel_opt = cxl_shm::Channel::Create(
+        *channel_name_result,
+        "store_client_" + *channel_name_result,
+        "/dev/dax0.0",
+        1024ULL * 1024ULL * 1024ULL,
+        master_server_addr,
+        cxl_shm::ChannelMode::CXL_SHM_REQ,
+        false);
+    if (!channel_opt.has_value()) {
+        LOG(ERROR) << "Failed to create cxl channel: " << *channel_name_result;
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+    auto channel = *channel_opt;
+    auto bind_result = channel->Bind();
+    if (!bind_result.has_value()) {
+        LOG(ERROR) << "Failed to bind cxl channel: " << *channel_name_result;
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+    LOG(INFO) << "Successfully bound cxl channel: " << *channel_name_result;
+    cxl_channel_accessor_.SetChannel(channel, *channel_name_result);
+    LOG(INFO) << "end of initialize cxl channel ...";
+    
+    // 启动心跳线程
+    heartbeat_running_.store(true);
+    heartbeat_thread_ = std::thread([this, channel]() {
+        // 立即发送一次心跳
+        this->sendHeartbeat(channel);
+        
+        // 每隔1分钟发送一次心跳
+        while (heartbeat_running_.load()) {
+            std::this_thread::sleep_for(std::chrono::minutes(1));
+            if (heartbeat_running_.load()) {
+                this->sendHeartbeat(channel);
+            }
+        }
+    });
+    heartbeat_thread_.detach();
+    LOG(INFO) << "Heartbeat thread started for CXL channel";
+    
+    return true;
+#else
+    return false;
+#endif
+}
+
+tl::expected<bool, ErrorCode> MasterClient::ResetCxlChannelRpcClient() {
+#if defined(STORE_USE_CXL_CHANNEL)
+    auto channel = cxl_channel_accessor_.GetChannel();
+    if (!channel) {
+        LOG(ERROR) << "CXL channel not available";
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+
+    auto result = channel->Unbind();
+    if (!result.has_value()) {
+        return tl::unexpected(ErrorCode::RPC_FAIL);
+    }
+    cxl_channel_accessor_.SetChannel(nullptr, "");
+
+    return true;
+#else
+    return false;
+#endif
 }
 
 std::vector<tl::expected<bool, ErrorCode>> MasterClient::BatchExistKey(
@@ -124,17 +351,40 @@ tl::expected<std::vector<Replica::Descriptor>, ErrorCode>
 MasterClient::GetReplicaList(const std::string& object_key) {
     ScopedVLogTimer timer(1, "MasterClient::GetReplicaList");
     timer.LogRequest("object_key=", object_key);
-
+#if defined(STORE_USE_CXL_CHANNEL)
+    auto channel = cxl_channel_accessor_.GetChannel();
+    if (channel) {
+        CxlChannelRpcRequest req;
+        req.op = CxlChannelRpcOp::GetReplicaList;
+        req.key = object_key;
+        std::string req_str = req.serialize();
+        auto send_result = channel->Send(req_str.data(), req_str.size());
+        if (!send_result.has_value()) {
+            LOG(ERROR) << "CXL Send failed";
+            return tl::make_unexpected(ErrorCode::RPC_FAIL);
+        }
+        char resp_buf[STORE_CXL_CHANNEL_MSG_SIZE] = {0};
+        auto recv_result = channel->Recv(resp_buf, STORE_CXL_CHANNEL_MSG_SIZE);
+        if (!recv_result.has_value()) {
+            LOG(ERROR) << "CXL Recv failed";
+            return tl::make_unexpected(ErrorCode::RPC_FAIL);
+        }
+        CxlChannelRpcResponse resp = CxlChannelRpcResponse::deserialize(std::string(resp_buf, recv_result.value()));
+        if (resp.error_code != 0) {
+            return tl::make_unexpected(static_cast<ErrorCode>(resp.error_code));
+        }
+        return resp.replica_list;
+    }
+#endif
+    // http RPC path
     auto client = client_accessor_.GetClient();
     if (!client) {
         LOG(ERROR) << "Client not available";
         timer.LogResponse("error=Client not available");
         return tl::make_unexpected(ErrorCode::RPC_FAIL);
     }
-
     auto request_result =
         client->send_request<&WrappedMasterService::GetReplicaList>(object_key);
-
     auto result = coro::syncAwait(
         [&]() -> coro::Lazy<
                   tl::expected<std::vector<Replica::Descriptor>, ErrorCode>> {
@@ -702,6 +952,44 @@ tl::expected<void, ErrorCode> MasterClient::MigrateEnd(const std::string& key,
     timer.LogResponseExpected(result);
     return result;
 }
+
+#if defined(STORE_USE_CXL_CHANNEL)
+void MasterClient::sendHeartbeat(std::shared_ptr<cxl_shm::Channel> channel) {
+    try {
+        CxlChannelRpcRequest req;
+        req.op = CxlChannelRpcOp::Heartbeat;
+        std::string req_str = req.serialize();
+        
+        auto send_result = channel->Send(req_str.data(), req_str.size());
+        if (!send_result.has_value()) {
+            LOG(WARNING) << "CXL heartbeat Send failed";
+            return;
+        }
+        
+        // 接收响应
+        char resp_buf[STORE_CXL_CHANNEL_MSG_SIZE] = {0};
+        auto recv_result = channel->Recv(resp_buf, STORE_CXL_CHANNEL_MSG_SIZE);
+        if (!recv_result.has_value()) {
+            LOG(WARNING) << "CXL heartbeat Recv failed";
+            return;
+        }
+        
+        // 反序列化并验证响应
+        CxlChannelRpcResponse resp = CxlChannelRpcResponse::deserialize(std::string(resp_buf, recv_result.value()));
+        if (resp.status != CxlChannelRpcStatus::Success || resp.error_code != 0) {
+            LOG(WARNING) << "CXL heartbeat response error: status=" 
+                        << static_cast<int>(resp.status) 
+                        << ", error_code=" << resp.error_code;
+            return;
+        }
+        
+        VLOG(1) << "CXL heartbeat sent and received successfully";
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Exception in sendHeartbeat: " << e.what();
+    }
+}
+#endif
+
 tl::expected<DegradeMsg, ErrorCode> MasterClient::PopMasterMQ(const UUID& client_id) {
     ScopedVLogTimer timer(1, "MasterClient::PeakMasterMQ");
     // LOG(WARNING) << "MasterClient::PopMasterMQ, client_id:" << client_id;

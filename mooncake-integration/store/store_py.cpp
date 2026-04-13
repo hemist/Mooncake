@@ -279,7 +279,7 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
             }
         } else if (protocol.first == StorageLevel::CXL) { 
             void *ptr = client_->GetBaseAddr();
-            LOG(INFO) << "Mounting CXL segment: " << DEFAULT_CXL_SIZE << " bytes, " << ptr;
+            LOG(INFO) << "Mounting CXL segment1: " << DEFAULT_CXL_SIZE << " bytes, " << ptr;
             auto mount_result = client_->MountSegment(ptr, DEFAULT_CXL_SIZE, protocol.first);
             if (!mount_result.has_value()) {
                 LOG(ERROR) << "Failed to mount segment: "
@@ -288,6 +288,8 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
             }
         }
     }
+
+    client_->CreateCxlChannelRpcClient("127.0.0.1:50052");
 
     return {};
 }
@@ -329,7 +331,9 @@ tl::expected<void, ErrorCode> DistributedObjectStore::tearDownAll_internal() {
         LOG(ERROR) << "Client is not initialized";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
+
     // Reset all resources
+    client_->ResetCxlChannelRpcClient();
     client_.reset();
     client_buffer_allocator_.reset();
     segment_ptrs_.clear();
@@ -776,6 +780,7 @@ int DistributedObjectStore::isExist(const std::string &key) {
         return toInt(result.error());
     }
 }
+
 
 std::vector<int> DistributedObjectStore::batchIsExist(
     const std::vector<std::string> &keys) {

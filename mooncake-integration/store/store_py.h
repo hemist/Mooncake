@@ -11,6 +11,10 @@
 #include "client.h"
 #include "client_buffer.hpp"
 
+#if defined(STORE_USE_CXL_CHANNEL)
+#include "cxl_shm/message_queue.h"
+#endif
+
 namespace mooncake {
 
 class DistributedObjectStore;
@@ -357,6 +361,8 @@ class DistributedObjectStore {
 
     tl::expected<bool, ErrorCode> isExist_internal(const std::string &key);
 
+    tl::expected<std::string, ErrorCode> cxlChannelHandshake_internal();
+
     std::vector<tl::expected<bool, ErrorCode>> batchIsExist_internal(
         const std::vector<std::string> &keys);
 
@@ -383,6 +389,11 @@ class DistributedObjectStore {
     std::vector<std::string> protocols;
     std::string device_name;
     std::string local_hostname;
+
+#if defined(STORE_USE_CXL_CHANNEL)
+    std::shared_ptr<cxl_shm::Channel> cxl_channel_ = nullptr;
+    std::string cxl_channel_name_;
+#endif
 };
 
 }  // namespace mooncake

@@ -190,6 +190,14 @@ tl::expected<bool, ErrorCode> WrappedMasterService::ExistKey(
         [] { MasterMetricManager::instance().inc_exist_key_failures(); });
 }
 
+tl::expected<std::string, ErrorCode> WrappedMasterService::cxlChannelHandshake() {
+    return execute_rpc(
+        "cxlChannelHandshake", [&] { return master_service_.cxlChannelHandshake(); },
+        [&](auto& timer) { timer.LogRequest("action=handshake"); },
+        [] { /* no specific metric */ },
+        [] { /* no specific failure metric */ });
+}
+
 std::vector<tl::expected<bool, ErrorCode>> WrappedMasterService::BatchExistKey(
     const std::vector<std::string>& keys) {
     ScopedVLogTimer timer(1, "BatchExistKey");
@@ -552,6 +560,8 @@ void RegisterRpcService(
     server.register_handler<&mooncake::WrappedMasterService::MigrateEnd>(
         &wrapped_master_service);
     server.register_handler<&mooncake::WrappedMasterService::PopMasterMQ>(
+        &wrapped_master_service);
+    server.register_handler<&mooncake::WrappedMasterService::cxlChannelHandshake>(
         &wrapped_master_service);
 }
 
