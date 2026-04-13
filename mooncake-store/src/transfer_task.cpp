@@ -13,7 +13,7 @@ namespace mooncake {
 // EngineWorkerPool Implementation
 // ============================================================================
 //to fully utilize the available ssd bandwidth, we use a default of 10 worker threads.
-constexpr int kDefaultEngineWorkers = 1;
+constexpr int kDefaultEngineWorkers = 10;
 
 EngineWorkerPool::EngineWorkerPool(TransferEngine& engine) 
     :shutdown_(false), engine_(engine) {

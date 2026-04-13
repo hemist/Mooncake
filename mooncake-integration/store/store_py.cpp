@@ -1220,23 +1220,31 @@ int DistributedObjectStore::batch_put_from_warp(
     const std::vector<void *> &buffers,
     size_t size, 
     const ReplicateConfig &config) {
+    printf("print [PUT-start] batch_put_from_warp start-1\n");
     LOG(INFO) << "[PUT-start] batch_put_from_warp start";
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
 
+    printf("print [PUT-start] batch_put_from_warp start-2\n");
+
     if (buffers.size() % keys.size() != 0) {
         LOG(ERROR) << "Invalid buffer size in a warp";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
+
+    printf("print [PUT-start] batch_put_from_warp start-3\n");
 
     std::vector<Slice> slices;
     for (size_t i = 0; i < buffers.size(); i++) {
         slices.emplace_back(Slice{buffers[i], size});
     }
 
+    printf("print [PUT-start] batch_put_from_warp start-4\n");
+
     auto put_result = client_->BatchPutWarp(keys, slices, config);
+    printf("print [PUT-end] batch_put_from_warp end-1\n");
     LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
     if (keys.size() > 1) {
         LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
@@ -2107,7 +2115,9 @@ int DistributedObjectStore::put_tensor(const std::string &key,
 }
 
 PYBIND11_MODULE(store, m) {
-    // Define the ReplicateConfig class
+    FLAGS_logtostderr = 1;
+    FLAGS_minloglevel = 0;
+
     py::class_<ReplicateConfig>(m, "ReplicateConfig")
         .def(py::init<>())
         .def_readwrite("replica_num", &ReplicateConfig::replica_num)
@@ -2273,6 +2283,11 @@ PYBIND11_MODULE(store, m) {
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
                bool use_cxl) {
+                if (!use_cxl) {
+                    LOG(ERROR) << "BatchGetWarp only support cxl storage level for now.";
+                    return static_cast<int>(ErrorCode::INVALID_PARAMS);
+                }
+
                 std::vector<void *> buffers;
                 buffers.reserve(buffer_ptrs.size());
                 for (uintptr_t ptr : buffer_ptrs) {
@@ -2371,6 +2386,11 @@ PYBIND11_MODULE(store, m) {
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
                bool use_cxl) {
+                if (!use_cxl) {
+                    LOG(ERROR) << "BatchPutWarp only support cxl storage level for now.";
+                    return static_cast<int>(ErrorCode::INVALID_PARAMS);
+                }
+
                 std::vector<void *> buffers;
                 buffers.reserve(buffer_ptrs.size());
                 for (uintptr_t ptr : buffer_ptrs) {

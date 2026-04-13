@@ -57,11 +57,12 @@ void launch_batch_memcpy(const void* const* src_list,
     int n_segments,
     cudaStream_t stream) {
 
-    constexpr int THREADS = 96;
+    constexpr int THREADS = 128;
     constexpr int WARPS_PER_BLOCK = THREADS / WARP_SIZE; // 8 warps per block
-    constexpr int ITEMS_PER_WARP = 2;
+    constexpr int ITEMS_PER_WARP = 1;
 
-    int blocks = std::max(WARP_SIZE, 2 * (n_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK / 2);
+    int blocks = std::max(WARP_SIZE, 2 * (n_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK / ITEMS_PER_WARP);
+    // int blocks = (n_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK / ITEMS_PER_WARP;
 
     batch_memcpy_kernel<ITEMS_PER_WARP><<<blocks, THREADS, 0, stream>>>(
         src_list, dst_list, segment_size, n_segments);

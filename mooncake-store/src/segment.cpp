@@ -11,21 +11,18 @@ ErrorCode ScopedSegmentAccess::MountSegment(const Segment& segment,
 
     // Check if cxl storage is enable
     if (segment_manager_->enable_cxl_ && segment.level == StorageLevel::CXL) {
-        // if (segment_manager_->memory_allocator_ == BufferAllocatorType::CACHELIB) {
-            auto allocator = segment_manager_->cxl_global_allocator_;
-            if (segment_manager_->cxl_global_allocator_ == nullptr ||
-                segment_manager_->allocators_.empty()) {
-                LOG(ERROR) << "Cxl global allocator has not been initialized.";
-                return ErrorCode::INTERNAL_ERROR;
-            }
-            segment_manager_->allocators_by_name_[segment.name].push_back(allocator);
-            segment_manager_->client_segments_[client_id].push_back(segment.id);
-            segment_manager_->mounted_segments_[segment.id] = {
-                segment, SegmentStatus::OK, allocator};
+        auto allocator = segment_manager_->cxl_global_allocator_;
+        if (segment_manager_->cxl_global_allocator_ == nullptr ||
+            segment_manager_->allocators_.empty()) {
+            LOG(ERROR) << "Cxl global allocator has not been initialized.";
+            return ErrorCode::INTERNAL_ERROR;
+        }
+        segment_manager_->allocators_by_name_[segment.name].push_back(allocator);
+        segment_manager_->client_segments_[client_id].push_back(segment.id);
+        segment_manager_->mounted_segments_[segment.id] = {
+            segment, SegmentStatus::OK, allocator};
 
-            return ErrorCode::OK;
-        // }
-        return ErrorCode::INTERNAL_ERROR;
+        return ErrorCode::OK;
     }
     
 
@@ -358,15 +355,17 @@ ErrorCode ScopedSegmentAllocatorAccess::updateReplicateConfigBySegment(Replicate
 void SegmentManager::initializeCxlAllocator() {
     VLOG(1) << "Init CXL global allocator.";
     size_t cxl_size = DEFAULT_CXL_SIZE;
-    // cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
-    //                                             DEFAULT_CXL_PATH, 
-    //                                             DEFAULT_CXL_BASE, 
-    //                                             DEFAULT_CXL_SIZE);
-
-    cxl_global_allocator_ = std::make_shared<OffsetBufferAllocator>(
-                                                DEFAULT_CXL_PATH, 
-                                                DEFAULT_CXL_BASE, 
-                                                cxl_size);
+    if (memory_allocator_ == BufferAllocatorType::CACHELIB) {
+        cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
+            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size
+        );
+        LOG(INFO) << "CachelibBufferAllocator initialized.";
+    } else if (memory_allocator_ == BufferAllocatorType::OFFSET) {
+        cxl_global_allocator_ = std::make_shared<OffsetBufferAllocator>(
+            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size
+        );
+        LOG(INFO) << "OffsetBufferAllocator initialized.";
+    }
 
     allocators_.push_back(cxl_global_allocator_);
 
