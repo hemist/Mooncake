@@ -41,7 +41,8 @@ class MultiTransport {
     Status submitTransfer(BatchID batch_id,
                           const std::vector<TransferRequest> &entries,
                           std::string &proto,
-                          bool use_kernel = false);
+                          bool use_kernel = false,
+                          uintptr_t cuda_stream = 0);
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status);
@@ -58,6 +59,10 @@ class MultiTransport {
     std::vector<Transport *> listTransports();
 
     void cudaDefaultStreamSynchronize();
+
+    // Stream-aware sync. `stream` is a cudaStream_t cast to uintptr_t so this
+    // header stays free of <cuda_runtime.h>; 0 == default stream.
+    void cudaStreamSynchronize(uintptr_t stream);
 
     void *getBaseAddr();
 

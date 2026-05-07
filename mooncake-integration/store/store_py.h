@@ -143,9 +143,10 @@ class DistributedObjectStore {
                                     const std::vector<void *> &buffers,
                                     const std::vector<size_t> &sizes);
 
-    int batch_get_into_warp(const std::vector<std::string> &keys, 
+    int batch_get_into_warp(const std::vector<std::string> &keys,
                             const std::vector<void *> &buffers,
-                            size_t size);
+                            size_t size,
+                            uintptr_t cuda_stream = 0);
 
     /**
      * @brief Put object data directly from a pre-allocated buffer
@@ -206,9 +207,10 @@ class DistributedObjectStore {
 
     int batch_put_from_warp(
         const std::vector<std::string> &keys,
-        const std::vector<void *> &buffers, 
+        const std::vector<void *> &buffers,
         size_t size,
-        const ReplicateConfig &config = ReplicateConfig{});
+        const ReplicateConfig &config = ReplicateConfig{},
+        uintptr_t cuda_stream = 0);
 
     int put_parts(const std::string &key,
                   std::vector<std::span<const char>> values,
@@ -324,7 +326,8 @@ class DistributedObjectStore {
     
     tl::expected<void, ErrorCode> batch_get_into_warp_internal(
         const std::vector<std::string> &keys,
-        const std::vector<void *> &buffers, size_t size);
+        const std::vector<void *> &buffers, size_t size,
+        uintptr_t cuda_stream = 0);
 
     tl::expected<void, ErrorCode> put_from_internal(
         const std::string &key, void *buffer, size_t size,

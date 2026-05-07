@@ -398,7 +398,8 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     const std::vector<std::string>& object_keys,
     const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
     std::unordered_map<std::string, std::vector<Slice>>& slices,
-    bool use_warp) {
+    bool use_warp,
+    uintptr_t cuda_stream) {
     CHECK(transfer_submitter_) << "TransferSubmitter not initialized";
 
     // Validate input size consistency
@@ -477,7 +478,7 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     }
 
     if (all_success && use_warp) {
-        transfer_engine_.cudaDefaultStreamSynchronize();
+        transfer_engine_.cudaStreamSynchronize(cuda_stream);
     }
 
     LOG(INFO) << "BatchGet Parallel Submit End";
@@ -489,7 +490,8 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
 std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
     const std::vector<std::string>& object_keys,
     const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
-    std::unordered_map<std::string, std::vector<Slice>>& slices) {
+    std::unordered_map<std::string, std::vector<Slice>>& slices,
+    uintptr_t cuda_stream) {
 
     std::vector<tl::expected<void, ErrorCode>> results;
 
@@ -539,12 +541,10 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGetCxl(
         transfer_slices_list.push_back(slices_it->second);
     }
 
-    ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::READ);
+    ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list,
+                                          TransferRequest::READ, cuda_stream);
     if (result == ErrorCode::OK) {
         LOG(INFO) << "TransferDataKernel success: " << static_cast<int>(result);
-        // for (size_t i = 0; i < object_keys.size(); ++i) {
-        //     results[i] = tl::unexpected(result);
-        // }
     } else {
         LOG(INFO) << "TransferDataKernel failed with error: " << static_cast<int>(result);
         for (size_t i = 0; i < object_keys.size(); ++i) {
@@ -558,11 +558,12 @@ tl::expected<void, ErrorCode> Client::BatchGetWarp(
     const std::vector<std::string>& object_keys,
     const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
     std::unordered_map<std::string, std::vector<Slice>>& slices,
-    bool use_cuda_kernel) {
-    
-    auto res_list = use_cuda_kernel ? 
-                    BatchGetCxl(object_keys, replica_lists, slices): 
-                    BatchGet(object_keys, replica_lists, slices, true);
+    bool use_cuda_kernel,
+    uintptr_t cuda_stream) {
+
+    auto res_list = use_cuda_kernel ?
+                    BatchGetCxl(object_keys, replica_lists, slices, cuda_stream):
+                    BatchGet(object_keys, replica_lists, slices, /*use_warp=*/true, cuda_stream);
     for (auto& res : res_list) {
         if (!res)
             return tl::unexpected(res.error());
@@ -795,7 +796,8 @@ void Client::StartBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
 
 void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
                             const ReplicateConfig& config,
-                            bool use_cxl_kernel) {
+                            bool use_cxl_kernel,
+                            uintptr_t cuda_stream) {
     bool use_warp = config.use_warp;
     if (use_cxl_kernel) {
         std::vector<Replica::Descriptor> transfer_replica_list;
@@ -845,7 +847,8 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
         //     }
         // }
 
-        ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list, TransferRequest::WRITE);
+        ErrorCode result = TransferDataKernel(transfer_replica_list, transfer_slices_list,
+                                              TransferRequest::WRITE, cuda_stream);
         if (result == ErrorCode::OK) {
             for (auto& op : ops) {
                 op->SetSuccess();
@@ -894,7 +897,7 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
             }
 
             auto submit_result = transfer_submitter_->submit(
-                replica, slices, TransferRequest::WRITE);
+                replica, slices, TransferRequest::WRITE, cuda_stream);
 
             if (!submit_result) {
                 failure_context = "Failed to submit transfer for replica " +
@@ -918,7 +921,9 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
     }
 }
 
-void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, const ReplicateConfig& config) {
+void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
+                              const ReplicateConfig& config,
+                              uintptr_t cuda_stream) {
     bool use_warp = config.use_warp;
     bool use_cxl = config.preferred_storage_level == StorageLevel::CXL;
 
@@ -965,7 +970,7 @@ void Client::WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops, c
             op->SetSuccess();
 
             if (use_cxl && use_warp) {
-                transfer_engine_.cudaDefaultStreamSynchronize();
+                transfer_engine_.cudaStreamSynchronize(cuda_stream);
             }
             // Transfer phase successful - continue to finalization
             // Note: Don't mark as SUCCESS yet, need to complete finalization
@@ -1271,7 +1276,8 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchPut(
 tl::expected<void, ErrorCode> Client::BatchPutWarp(
     const std::vector<ObjectKey>& keys,
     std::vector<Slice>& batched_slices,
-    const ReplicateConfig& config) {
+    const ReplicateConfig& config,
+    uintptr_t cuda_stream) {
     // Reset important configs
     ReplicateConfig client_config = config;
     client_config.client_id = client_id_;
@@ -1281,21 +1287,14 @@ tl::expected<void, ErrorCode> Client::BatchPutWarp(
     const char *env = std::getenv("USE_CXL_CUDA_KERNEL");
     bool use_cxl_cuda_kernel = env && std::string(env) == "1" && client_config.preferred_storage_level == StorageLevel::CXL;
 
-    // Create operations
-    // WarpPutOperation op{keys, batched_slices};
-    // std::vector<WarpPutOperation> ops{op};
     std::vector<std::unique_ptr<PutOperation>> ops;
     ops.emplace_back(std::make_unique<WarpPutOperation>(keys, batched_slices));
 
-    // for (auto &slice : batched_slices) {
-    //     LOG(INFO) << "Batch Put Slice: " << slice.ptr << " size: " << slice.size;
-    // }
-
     // Warp Batch Put Start
     StartBatchPut(ops, client_config);
-    SubmitPutTransfers(ops, client_config, use_cxl_cuda_kernel);
-    if (!use_cxl_cuda_kernel) 
-        WaitForTransfers(ops, client_config);
+    SubmitPutTransfers(ops, client_config, use_cxl_cuda_kernel, cuda_stream);
+    if (!use_cxl_cuda_kernel)
+        WaitForTransfers(ops, client_config, cuda_stream);
     FinalizeBatchPut(ops, client_config, use_cxl_cuda_kernel);
     BatchPuttoLocalFile(ops, client_config);
     return ops[0]->result;
@@ -1676,7 +1675,8 @@ bool validateTransferParams(
 }
 ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& replica_list,
                                     std::vector<std::vector<Slice>>& slices_list,
-                                    TransferRequest::OpCode op_code) { 
+                                    TransferRequest::OpCode op_code,
+                                    uintptr_t cuda_stream) {
     LOG(INFO) << "Start CXL TransferDataKernel, replica list size: " << replica_list.size()
             << ", slices list size: " << slices_list.size();
 
@@ -1745,10 +1745,11 @@ ErrorCode Client::TransferDataKernel(const std::vector<Replica::Descriptor>& rep
             tasks.emplace_back(task.get());
         }
 
-        if (transfer_success) { 
+        if (transfer_success) {
             // Submit transfer
             std::string task_proto = "cxl";
-            Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto, true);
+            Status s = transfer_engine_.submitTransfer(batch_id, requests, task_proto,
+                                                       /*use_kernel=*/true, cuda_stream);
             if (!s.ok()) {
                 LOG(ERROR) << "Failed to submit all transfers, error code is "
                         << s.code();

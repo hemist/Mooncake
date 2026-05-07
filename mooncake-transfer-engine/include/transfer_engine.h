@@ -144,8 +144,10 @@ class TransferEngine {
     Status submitTransfer(BatchID batch_id,
                           const std::vector<TransferRequest> &entries,
                           std::string &proto,
-                          bool use_kernel = false) {
-        return multi_transports_->submitTransfer(batch_id, entries, proto, use_kernel);
+                          bool use_kernel = false,
+                          uintptr_t cuda_stream = 0) {
+        return multi_transports_->submitTransfer(batch_id, entries, proto,
+                                                 use_kernel, cuda_stream);
     }
 
     Status submitTransferWithNotify(BatchID batch_id,
@@ -221,6 +223,13 @@ class TransferEngine {
 
     void cudaDefaultStreamSynchronize() {
         multi_transports_->cudaDefaultStreamSynchronize();
+    }
+
+    // Stream-aware sync. `stream` is a cudaStream_t cast to uintptr_t; 0 ==
+    // default stream. Lets callers (e.g. mooncake-store warp paths) target a
+    // specific CUDA stream instead of the implicit default one.
+    void cudaStreamSynchronize(uintptr_t stream) {
+        multi_transports_->cudaStreamSynchronize(stream);
     }
 
     void *getBaseAddr() {

@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -54,12 +55,21 @@ class CxlTransport : public Transport {
     Status submitTransferTaskKernel(
         const std::vector<TransferTask *> &task_list);
 
-    Status submitTransferDirectKernel(const std::vector<TransferRequest> &entries);
+    // `stream` is a cudaStream_t cast to uintptr_t (0 == default stream).
+    // The kernel launch and the trailing sync both run on this stream so the
+    // call composes with caller-side CUDA work.
+    Status submitTransferDirectKernel(const std::vector<TransferRequest> &entries,
+                                      uintptr_t stream = 0);
 
     Status getTransferStatus(BatchID batch_id, size_t task_id,
                              TransferStatus &status) override;
 
     void cudaDefaultStreamSynchronize();
+
+    // Synchronize a specific CUDA stream. `stream` is a cudaStream_t cast to
+    // uintptr_t (so this header stays free of <cuda_runtime.h>); 0 == default
+    // stream, equivalent to cudaDefaultStreamSynchronize().
+    void cudaStreamSynchronize(uintptr_t stream);
 
     void* getCxlBaseAddr() { return cxl_base_addr; }
 
@@ -92,7 +102,12 @@ class CxlTransport : public Transport {
     int execute_copy_crc(void *dest, void *src, size_t size);
     int execute_copy_crc_slice(void *dest, void *src, size_t size);
 #endif
-    int cxlMemcpy(void *dest_addr, void *source_addr, size_t size, bool is_read = false);
+    // `stream` is a cudaStream_t cast to uintptr_t (0 == default stream); only
+    // the USE_CXL_CUDA branch (cudaMemcpyAsync) consults it. Other branches
+    // ignore it. `is_read` controls whether the plain-memcpy fallback issues a
+    // post-write clflush (write side only).
+    int cxlMemcpy(void *dest_addr, void *source_addr, size_t size,
+                  bool is_read = false, uintptr_t stream = 0);
 
     bool isAddressInCxlRange(void *addr);
 

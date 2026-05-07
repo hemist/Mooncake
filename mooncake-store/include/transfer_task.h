@@ -338,17 +338,22 @@ struct EngineTask {
     Transport::TransferRequest::OpCode op_code;
     std::string proto;
     std::shared_ptr<TransferEngineOperationState> state;
+    // cudaStream_t cast to uintptr_t (0 == default stream). Carried across the
+    // worker pool so the worker thread can stamp it onto each TransferRequest.
+    uintptr_t cuda_stream;
 
     EngineTask(const std::vector<AllocatedBuffer::Descriptor> &handles,
                const std::vector<Slice> &slices,
                Transport::TransferRequest::OpCode op_code,
                const std::string &proto,
-               std::shared_ptr<TransferEngineOperationState> s)
-        : handles(handles), 
-          slices(slices), 
-          op_code(op_code), 
+               std::shared_ptr<TransferEngineOperationState> s,
+               uintptr_t cuda_stream = 0)
+        : handles(handles),
+          slices(slices),
+          op_code(op_code),
           proto(proto),
-          state(std::move(s)) {}
+          state(std::move(s)),
+          cuda_stream(cuda_stream) {}
 };
 
 class EngineWorkerPool {
@@ -461,7 +466,8 @@ class TransferSubmitter {
      */
     std::optional<TransferFuture> submit(
         const Replica::Descriptor& replica,
-        std::vector<Slice>& slices, Transport::TransferRequest::OpCode op_code);
+        std::vector<Slice>& slices, Transport::TransferRequest::OpCode op_code,
+        uintptr_t cuda_stream = 0);
 
     void receive(TransferFuture& future);
 
@@ -507,9 +513,10 @@ class TransferSubmitter {
      */
     std::optional<TransferFuture> submitTransferEngineOperation(
         const std::vector<AllocatedBuffer::Descriptor>& handles,
-        std::vector<Slice>& slices, 
+        std::vector<Slice>& slices,
         Transport::TransferRequest::OpCode op_code,
-        std::string &proto);
+        std::string &proto,
+        uintptr_t cuda_stream = 0);
 
     std::optional<TransferFuture> submitFileReadOperation(
     const Replica::Descriptor& replica, std::vector<Slice>& slices, 

@@ -60,6 +60,11 @@ class Transport {
         uint64_t target_offset;
         size_t length;
         int advise_retry_cnt = 0;
+        // Optional CUDA stream handle for transports that issue CUDA work
+        // (currently only CxlTransport's CUDA paths). Stored as uintptr_t to
+        // keep this header free of <cuda_runtime.h>; cast to cudaStream_t at
+        // the call site. 0 == default stream.
+        uintptr_t advise_cuda_stream = 0;
     };
 
     enum TransferStatusEnum {

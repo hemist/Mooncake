@@ -1211,10 +1211,11 @@ std::string DistributedObjectStore::get_hostname() const {
 }
 
 int DistributedObjectStore::batch_put_from_warp(
-    const std::vector<std::string> &keys, 
+    const std::vector<std::string> &keys,
     const std::vector<void *> &buffers,
-    size_t size, 
-    const ReplicateConfig &config) {
+    size_t size,
+    const ReplicateConfig &config,
+    uintptr_t cuda_stream) {
     LOG(INFO) << "[PUT-start] batch_put_from_warp start";
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
@@ -1231,7 +1232,7 @@ int DistributedObjectStore::batch_put_from_warp(
         slices.emplace_back(Slice{buffers[i], size});
     }
 
-    auto put_result = client_->BatchPutWarp(keys, slices, config);
+    auto put_result = client_->BatchPutWarp(keys, slices, config, cuda_stream);
     LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
     if (keys.size() > 1) {
         LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
@@ -1317,12 +1318,13 @@ std::vector<int> DistributedObjectStore::batch_get_into_from_cxl(
 }
 
 int DistributedObjectStore::batch_get_into_warp(
-    const std::vector<std::string> &keys, 
+    const std::vector<std::string> &keys,
     const std::vector<void *> &buffers,
-    size_t size) {
+    size_t size,
+    uintptr_t cuda_stream) {
 
     LOG(INFO) << "[GET-start] batch_get_into_warp start";
-    int64_t rc = to_py_ret(batch_get_into_warp_internal(keys, buffers, size));
+    int64_t rc = to_py_ret(batch_get_into_warp_internal(keys, buffers, size, cuda_stream));
     LOG(INFO) << "[GET-end] batch_get_into_warp end";
     return rc;
 }
@@ -1697,10 +1699,11 @@ DistributedObjectStore::batch_get_into_from_cxl_internal(
     return results;
 }
 
-tl::expected<void, ErrorCode> 
+tl::expected<void, ErrorCode>
 DistributedObjectStore::batch_get_into_warp_internal(
     const std::vector<std::string> &keys,
-    const std::vector<void *> &buffers, size_t size) {
+    const std::vector<void *> &buffers, size_t size,
+    uintptr_t cuda_stream) {
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
@@ -1767,7 +1770,8 @@ DistributedObjectStore::batch_get_into_warp_internal(
     bool use_cxl_cuda_kernel = env && std::string(env) == "1";
 
     LOG(INFO) << "BatchGetWarp Start";
-    auto res = client_->BatchGetWarp(keys, batch_replica_lists, batch_slices, use_cxl_cuda_kernel);
+    auto res = client_->BatchGetWarp(keys, batch_replica_lists, batch_slices,
+                                     use_cxl_cuda_kernel, cuda_stream);
     LOG(INFO) << "BatchGetWarp End";
 
     return res;
@@ -2267,7 +2271,8 @@ PYBIND11_MODULE(store, m) {
                const std::vector<std::string> &keys,
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
-               bool use_cxl) {
+               bool use_cxl,
+               uintptr_t stream_handle) {
                 if (!use_cxl) {
                     LOG(ERROR) << "BatchGetWarp only support cxl storage level for now.";
                     return static_cast<int>(ErrorCode::INVALID_PARAMS);
@@ -2279,10 +2284,13 @@ PYBIND11_MODULE(store, m) {
                     buffers.push_back(reinterpret_cast<void *>(ptr));
                 }
                 py::gil_scoped_release release;
-                return self.batch_get_into_warp(keys, buffers, size);
+                return self.batch_get_into_warp(keys, buffers, size, stream_handle);
             },
-            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"), py::arg("use_cxl"), 
-            "Get object data from CXL segment directly into pre-allocated buffers for multiple keys")
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"),
+            py::arg("use_cxl"), py::arg("stream_handle") = 0,
+            "Batch get into pre-allocated buffers via the warp path. "
+            "stream_handle is a cudaStream_t cast to uintptr_t "
+            "(e.g. torch.cuda.Stream.cuda_stream); 0 = default stream.")
         .def(
             "put_from",
             [](DistributedObjectStore &self, const std::string &key,
@@ -2370,7 +2378,8 @@ PYBIND11_MODULE(store, m) {
                const std::vector<std::string> &keys,
                const std::vector<uintptr_t> &buffer_ptrs,
                size_t size,
-               bool use_cxl) {
+               bool use_cxl,
+               uintptr_t stream_handle) {
                 if (!use_cxl) {
                     LOG(ERROR) << "BatchPutWarp only support cxl storage level for now.";
                     return static_cast<int>(ErrorCode::INVALID_PARAMS);
@@ -2387,10 +2396,13 @@ PYBIND11_MODULE(store, m) {
                 config.direct_cxl_alloc = use_cxl;
 
                 py::gil_scoped_release release;
-                return self.batch_put_from_warp(keys, buffers, size, config);
+                return self.batch_put_from_warp(keys, buffers, size, config, stream_handle);
             },
-            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"), py::arg("use_cxl"),
-            "Put object data directly from pre-allocated buffers for multiple keys by warp")
+            py::arg("keys"), py::arg("buffer_ptrs"), py::arg("size"),
+            py::arg("use_cxl"), py::arg("stream_handle") = 0,
+            "Batch put from pre-allocated buffers via the warp path. "
+            "stream_handle is a cudaStream_t cast to uintptr_t "
+            "(e.g. torch.cuda.Stream.cuda_stream); 0 = default stream.")
         .def(
             "put",
             [](DistributedObjectStore &self, const std::string &key,

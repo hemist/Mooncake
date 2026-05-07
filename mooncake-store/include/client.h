@@ -107,7 +107,8 @@ class Client {
         const std::vector<std::string>& object_keys,
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
         std::unordered_map<std::string, std::vector<Slice>>& slices,
-        bool use_warp = false);
+        bool use_warp = false,
+        uintptr_t cuda_stream = 0);
 
     /**
      * @brief Transfers data using pre-queried object information
@@ -119,7 +120,8 @@ class Client {
     std::vector<tl::expected<void, ErrorCode>> BatchGetCxl(
         const std::vector<std::string>& object_keys,
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
-        std::unordered_map<std::string, std::vector<Slice>>& slices);
+        std::unordered_map<std::string, std::vector<Slice>>& slices,
+        uintptr_t cuda_stream = 0);
 
     
     /**
@@ -133,7 +135,8 @@ class Client {
         const std::vector<std::string>& object_keys,
         const std::vector<std::vector<Replica::Descriptor>>& replica_lists,
         std::unordered_map<std::string, std::vector<Slice>>& slices,
-        bool use_cuda_kernel = false);
+        bool use_cuda_kernel = false,
+        uintptr_t cuda_stream = 0);
 
     /**
      * @brief Stores data with replication
@@ -167,7 +170,8 @@ class Client {
     tl::expected<void, ErrorCode> BatchPutWarp(
         const std::vector<ObjectKey>& keys,
         std::vector<Slice>& batched_slices,
-        const ReplicateConfig& config);
+        const ReplicateConfig& config,
+        uintptr_t cuda_stream = 0);
 
     /**
      * @brief Removes an object and all its replicas
@@ -277,7 +281,8 @@ class Client {
 
     ErrorCode TransferDataKernel(const std::vector<Replica::Descriptor>& replica_list,
                             std::vector<std::vector<Slice>>& slices_list,
-                            TransferRequest::OpCode op_code);
+                            TransferRequest::OpCode op_code,
+                            uintptr_t cuda_stream = 0);
                            
 
     /**
@@ -309,10 +314,12 @@ class Client {
     void StartBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
                        const ReplicateConfig& config);
     void SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
-                        const ReplicateConfig& config, 
-                        bool use_cxl_kernel = false);
+                        const ReplicateConfig& config,
+                        bool use_cxl_kernel = false,
+                        uintptr_t cuda_stream = 0);
     void WaitForTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
-                        const ReplicateConfig& config);
+                        const ReplicateConfig& config,
+                        uintptr_t cuda_stream = 0);
     void FinalizeBatchPut(std::vector<std::unique_ptr<PutOperation>>& ops,
                           const ReplicateConfig& config,
                           bool use_cxl_kernel = false);

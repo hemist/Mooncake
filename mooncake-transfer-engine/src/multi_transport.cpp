@@ -75,28 +75,42 @@ Status MultiTransport::freeBatchID(BatchID batch_id) {
     return Status::OK();
 }
 
-Status MultiTransport::submitTransfer(BatchID batch_id, 
+Status MultiTransport::submitTransfer(BatchID batch_id,
                                       const std::vector<TransferRequest> &entries,
                                       std::string &proto,
-                                      bool use_kernel) {    
+                                      bool use_kernel,
+                                      uintptr_t cuda_stream) {
     if (use_kernel) {
         Transport *transport = getTransport(proto);
         auto* cxl_transport = dynamic_cast<CxlTransport*>(transport);
-        return cxl_transport->submitTransferDirectKernel(entries);
+        return cxl_transport->submitTransferDirectKernel(entries, cuda_stream);
     }
-    
+
+    // Non-kernel path: stamp the stream onto every request so the CXL
+    // transport's per-slice cudaMemcpyAsync can pick it up. Other transports
+    // ignore advise_cuda_stream.
+    std::vector<TransferRequest> entries_with_stream;
+    const std::vector<TransferRequest> *effective_entries = &entries;
+    if (cuda_stream != 0) {
+        entries_with_stream = entries;
+        for (auto &req : entries_with_stream) {
+            req.advise_cuda_stream = cuda_stream;
+        }
+        effective_entries = &entries_with_stream;
+    }
+
     auto &batch_desc = *((BatchDesc *)(batch_id));
-    if (batch_desc.task_list.size() + entries.size() > batch_desc.batch_size) {
+    if (batch_desc.task_list.size() + effective_entries->size() > batch_desc.batch_size) {
         return Status::TooManyRequests(
             "Exceed the limitation of batch capacity");
     }
 
     size_t task_id = batch_desc.task_list.size();
-    batch_desc.task_list.resize(task_id + entries.size());
+    batch_desc.task_list.resize(task_id + effective_entries->size());
 
     std::unordered_map<Transport *, std::vector<Transport::TransferTask *> >
         submit_tasks;
-    for (auto &request : entries) {
+    for (auto &request : *effective_entries) {
         Transport *transport = nullptr;
         auto status = selectTransport(request, transport, proto);
         if (!status.ok()) return status;
@@ -291,6 +305,18 @@ void MultiTransport::cudaDefaultStreamSynchronize() {
         auto* cxl_transport = dynamic_cast<CxlTransport*>(transport);
         cxl_transport->cudaDefaultStreamSynchronize();
     }
+#endif
+}
+
+void MultiTransport::cudaStreamSynchronize(uintptr_t stream) {
+#ifdef USE_CXL
+    Transport *transport = getTransport("cxl");
+    if (transport) {
+        auto* cxl_transport = dynamic_cast<CxlTransport*>(transport);
+        if (cxl_transport) cxl_transport->cudaStreamSynchronize(stream);
+    }
+#else
+    (void)stream;
 #endif
 }
 

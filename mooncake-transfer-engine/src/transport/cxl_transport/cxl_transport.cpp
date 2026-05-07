@@ -168,38 +168,31 @@ void do_clflush(const void* addr, size_t len) {
     _mm_sfence();
 }
 
-int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read) {
+int CxlTransport::cxlMemcpy(void *dest, void *src, size_t size, bool is_read,
+                            uintptr_t stream) {
+#ifndef USE_CXL_CUDA
+    (void)stream;  // only the CUDA branch uses the stream
+#endif
     // Input validation
     if (!src || !dest) {
         LOG(ERROR) << "CxlTransport::cxlMemcpy invalid arguments: null pointer provided.";
         return -1; // null pointer
     }
-    
+
     // Validate memory bounds using the helper function
     if (!validateMemoryBounds(dest, src, size)) {
         return -1; // validation failed
     }
 
 #ifdef USE_CXL_CUDA
+    cudaStream_t cu_stream = reinterpret_cast<cudaStream_t>(stream);
     if (isAddressInCxlRange(dest) && isCudaAddress(src)) {
         // dest is CXL, src is VRAM, Opcode is TransferRequest::READ, VRAM->CXL
-        // // cudaHostRegister is finished in cxlDevInit()
-        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::READ, VRAM->CXL.";
-        // LOG(INFO) << "CXL:dest: " << dest << " CUDA:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
-
-        // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyDeviceToHost, 0));
-        // CUDA_CHECK(cudaStreamSynchronize(0));
+        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyDeviceToHost, cu_stream));
         return 0;
     } else if (isAddressInCxlRange(src) && isCudaAddress(dest)) {
         // dest is VRAM, src is CXL, Opcode is TransferRequest::WRITE, CXL->VRAM
-        // cudaHostRegister is finished in cxlDevInit()
-        // LOG(INFO) << "CxlTransport::cxlMemcpy TransferRequest::WRITE, CXL->VRAM.";
-        // LOG(INFO) << "CUDA:dest: " << dest << " CXL:src: " << src  << " size: " << size << " CXL:base " << cxl_base_addr;
-
-        // CUDA_CHECK(cudaMemcpy(dest, src, size, cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyHostToDevice, 0));
-        // CUDA_CHECK(cudaStreamSynchronize(0));
+        CUDA_CHECK(cudaMemcpyAsync(dest, src, size, cudaMemcpyHostToDevice, cu_stream));
         return 0;
     } else {
         LOG(INFO) << "CxlTransport::cxlMemcpy, you are using CXL_CUDA, but not using VRAM. src=" << src << ", dest=" << dest << ", size=" << size 
@@ -446,10 +439,11 @@ Status CxlTransport::submitTransfer(
           << " dest=0x" << slice->cxl.dest_addr
           << " length=" << std::dec << slice->length;
         int err;
+        const uintptr_t stream = request.advise_cuda_stream;
         if (slice->opcode == TransferRequest::READ) {
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length);
+                             slice->length, /*is_read=*/true, stream);
             std::ostringstream oss;
             oss << "READ slice source_addr dump (first 256 bytes max):\n";
             const unsigned char *p =
@@ -467,7 +461,7 @@ Status CxlTransport::submitTransfer(
         else
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length);
+                             slice->length, /*is_read=*/false, stream);
         if (err != 0)
             slice->markFailed();
         else
@@ -488,7 +482,8 @@ Status CxlTransport::submitTransferTask(
 
 #ifdef USE_CXL_CUDA
 
-Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferRequest> &entries) {
+Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferRequest> &entries,
+                                                uintptr_t stream) {
     int n = entries.size();
     void*  h_src[n] = {nullptr};
     void*  h_dst[n] = {nullptr};
@@ -498,7 +493,7 @@ Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferReques
 
     int idx = 0;
     bool write_opt = false;
-    for (auto &request : entries) { 
+    for (auto &request : entries) {
         uint64_t dest_cxl_offset = request.target_offset;
         write_opt = request.opcode == TransferRequest::WRITE;
 
@@ -510,35 +505,42 @@ Status CxlTransport::submitTransferDirectKernel(const std::vector<TransferReques
         idx++;
     }
 
-    CUDA_CHECK(cudaMalloc(&d_src_list_gpu, n * sizeof(void*)));
-    CUDA_CHECK(cudaMalloc(&d_dst_list_gpu, n * sizeof(void*)));
+    cudaStream_t cu_stream = reinterpret_cast<cudaStream_t>(stream);
 
-    CUDA_CHECK(cudaMemcpy(d_src_list_gpu, h_src, n * sizeof(void*), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_dst_list_gpu, h_dst, n * sizeof(void*), cudaMemcpyHostToDevice));
+    // Allocate and populate the per-segment src/dst pointer arrays on the
+    // same stream so the kernel launch below has no host-side stall.
+    CUDA_CHECK(cudaMallocAsync(&d_src_list_gpu, n * sizeof(void*), cu_stream));
+    CUDA_CHECK(cudaMallocAsync(&d_dst_list_gpu, n * sizeof(void*), cu_stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_src_list_gpu, h_src, n * sizeof(void*),
+                               cudaMemcpyHostToDevice, cu_stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_dst_list_gpu, h_dst, n * sizeof(void*),
+                               cudaMemcpyHostToDevice, cu_stream));
 
     if (write_opt) {
-        // LOG(INFO) << "CxlTransport::submitTransferTaskKernel WRITE";
         launch_batch_memcpy(
             (const void* const*)(d_src_list_gpu),
             (void* const*)(d_dst_list_gpu),
-            data_len, idx, 0
+            data_len, idx, cu_stream
         );
     } else {
-        // LOG(INFO) << "CxlTransport::submitTransferTaskKernel READ";
         launch_batch_memcpy(
             (const void* const*)(d_dst_list_gpu),
             (void* const*)(d_src_list_gpu),
-            data_len, idx, 0
+            data_len, idx, cu_stream
         );
     }
 
-    cudaError_t err  = cudaDeviceSynchronize();
+    // Free the staging arrays after the kernel finishes (still ordered on the
+    // same stream — the caller does the actual sync).
+    CUDA_CHECK(cudaFreeAsync(d_src_list_gpu, cu_stream));
+    CUDA_CHECK(cudaFreeAsync(d_dst_list_gpu, cu_stream));
+
+    cudaError_t err = ::cudaStreamSynchronize(cu_stream);
     if (err != cudaSuccess) {
-        LOG(ERROR) << "CxlTransport::submitTransferTaskKernel cudaDeviceSynchronize failed: "
+        LOG(ERROR) << "CxlTransport::submitTransferDirectKernel cudaStreamSynchronize failed: "
                    << cudaGetErrorString(err);
-        return Status::CxlKernelFail("cudaDeviceSynchronize failed");
+        return Status::CxlKernelFail("cudaStreamSynchronize failed");
     }
-    // LOG(INFO) << "CxlTransport::submitTransfer-Direct-Kernel done";
     return Status::OK();
 }
 
@@ -563,21 +565,21 @@ Status CxlTransport::submitTransferTaskKernel(
         task.slice_list.push_back(slice);
         __sync_fetch_and_add(&task.slice_count, 1);
         int err;
+        const uintptr_t stream = request.advise_cuda_stream;
         if (slice->opcode == TransferRequest::READ)
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length);
+                             slice->length, /*is_read=*/true, stream);
         else
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length);
+                             slice->length, /*is_read=*/false, stream);
         if (err != 0)
             slice->markFailed();
         else
             slice->markSuccess();
     }
 
-    // LOG(INFO) << "CxlTransport::submitTransfer-Normal-Task done";
     return Status::OK();
 }
 
@@ -606,14 +608,15 @@ Status CxlTransport::submitTransferTaskNormal(
 
         LOG(INFO) << "Data on cxl offset:" << dest_cxl_offset << ", length:" << slice->length << "\n";
         int err;
+        const uintptr_t stream = request.advise_cuda_stream;
         if (slice->opcode == TransferRequest::READ) {
             //READ: Source is in local memory, Destination is on CXL
             err = cxlMemcpy(slice->source_addr, (void *)slice->cxl.dest_addr,
-                             slice->length, true);
+                             slice->length, /*is_read=*/true, stream);
         } else {
             //WRITE: Source is in local memory, Destination is on CXL
             err = cxlMemcpy((void *)slice->cxl.dest_addr, slice->source_addr,
-                             slice->length, false);
+                             slice->length, /*is_read=*/false, stream);
         }
         if (err != 0)
             slice->markFailed();
@@ -624,7 +627,11 @@ Status CxlTransport::submitTransferTaskNormal(
 }
 
 void CxlTransport::cudaDefaultStreamSynchronize() {
-    CUDA_CHECK(cudaStreamSynchronize(0));
+    CUDA_CHECK(::cudaStreamSynchronize(0));
+}
+
+void CxlTransport::cudaStreamSynchronize(uintptr_t stream) {
+    CUDA_CHECK(::cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream)));
 }
 
 }  // namespace mooncake

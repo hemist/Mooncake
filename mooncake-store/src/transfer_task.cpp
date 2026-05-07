@@ -108,6 +108,7 @@ void EngineWorkerPool::workerThread() {
                     request.target_id = seg;
                     request.target_offset = handle.buffer_address_;
                     request.length = handle.size_;
+                    request.advise_cuda_stream = task.cuda_stream;
 
                     requests.emplace_back(request);
                 }
@@ -116,9 +117,13 @@ void EngineWorkerPool::workerThread() {
                 BatchID batch_id = task.state->getBatchID();
 
                 // LOG(INFO) << "TransferTask protocol: " << proto << ", request num: " << batch_size;
-                if (transfer_success) { 
-                    // Submit transfer
-                    Status s = engine_.submitTransfer(batch_id, requests, task.proto);
+                if (transfer_success) {
+                    // Submit transfer; cuda_stream is also passed to MultiTransport
+                    // for the use_kernel branch (and as a backup stamp for
+                    // non-kernel CXL).
+                    Status s = engine_.submitTransfer(batch_id, requests, task.proto,
+                                                     /*use_kernel=*/false,
+                                                     task.cuda_stream);
                     if (!s.ok()) {
                         LOG(ERROR) << "Failed to submit all transfers, error code is "
                                 << s.code();
@@ -522,7 +527,8 @@ TransferSubmitter::TransferSubmitter(TransferEngine& engine,
 
 std::optional<TransferFuture> TransferSubmitter::submit(
     const Replica::Descriptor& replica,
-    std::vector<Slice>& slices,  Transport::TransferRequest::OpCode op_code) {
+    std::vector<Slice>& slices,  Transport::TransferRequest::OpCode op_code,
+    uintptr_t cuda_stream) {
 
     if(replica.is_memory_replica()) {
         std::vector<AllocatedBuffer::Descriptor> handles;
@@ -540,9 +546,12 @@ std::optional<TransferFuture> TransferSubmitter::submit(
 
         switch (strategy) {
             case TransferStrategy::LOCAL_MEMCPY:
+                // LOCAL_MEMCPY uses plain memcpy on the host side; cuda_stream
+                // does not apply.
                 return submitMemcpyOperation(handles, slices, op_code);
             case TransferStrategy::TRANSFER_ENGINE:
-                return submitTransferEngineOperation(handles, slices, op_code, proto);
+                return submitTransferEngineOperation(handles, slices, op_code,
+                                                     proto, cuda_stream);
             default:
                 LOG(ERROR) << "Unknown transfer strategy: " << strategy;
                 return std::nullopt;
@@ -606,9 +615,10 @@ std::optional<TransferFuture> TransferSubmitter::submitMemcpyOperation(
 
 std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     const std::vector<AllocatedBuffer::Descriptor>& handles,
-    std::vector<Slice>& slices, 
+    std::vector<Slice>& slices,
     Transport::TransferRequest::OpCode op_code,
-    std::string &proto) {
+    std::string &proto,
+    uintptr_t cuda_stream) {
 
     auto state = std::make_shared<TransferEngineOperationState>(engine_);
     BatchID batch_id = engine_.allocateBatchID(handles.size());
@@ -619,7 +629,7 @@ std::optional<TransferFuture> TransferSubmitter::submitTransferEngineOperation(
     state->setBatch(batch_id, handles.size());
 
     // Submit transfer operations to worker pool for async execution
-    EngineTask task(handles, slices, op_code, proto, state);
+    EngineTask task(handles, slices, op_code, proto, state, cuda_stream);
     engine_pool_->submitTask(std::move(task));
 
     VLOG(1) << "Transfer engine task submitted to worker pool";
