@@ -242,7 +242,7 @@ inline std::ostream& operator<<(std::ostream& os,
     return os;
 }
 
-enum class StorageLevel {
+enum class StorageLevel : int {
     RAM = 0,
     CXL,
     SSD,

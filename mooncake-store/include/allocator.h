@@ -7,15 +7,16 @@
 
 #include "cachelib_memory_allocator/MemoryAllocator.h"
 #include "offset_allocator/offset_allocator.hpp"
-#include "types.h"
 
 using facebook::cachelib::MemoryAllocator;
 using facebook::cachelib::PoolId;
 
 namespace mooncake {
 
-// forward declare AllocatedBuffer
+// Forward declarations to break the allocator.h <-> types.h include cycle.
+// Full definitions are in types.h.
 class AllocatedBuffer;
+enum class StorageLevel : int;
 
 /**
  * Virtual base class for buffer allocators.
@@ -58,8 +59,9 @@ class CachelibBufferAllocator
     : public BufferAllocatorBase,
       public std::enable_shared_from_this<CachelibBufferAllocator> {
    public:
+    CachelibBufferAllocator(std::string segment_name, size_t base, size_t size);
     CachelibBufferAllocator(std::string segment_name, size_t base, size_t size,
-                            StorageLevel level = StorageLevel::RAM);
+                            StorageLevel level);
 
     ~CachelibBufferAllocator() override;
 
@@ -96,8 +98,9 @@ class OffsetBufferAllocator
     : public BufferAllocatorBase,
       public std::enable_shared_from_this<OffsetBufferAllocator> {
    public:
+    OffsetBufferAllocator(std::string segment_name, size_t base, size_t size);
     OffsetBufferAllocator(std::string segment_name, size_t base, size_t size,
-                          StorageLevel level = StorageLevel::RAM);
+                          StorageLevel level);
 
     ~OffsetBufferAllocator() override;
 

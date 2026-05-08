@@ -4,8 +4,10 @@
 #include <glog/logging.h>
 
 #include <memory>
+#include <utility>
 
 #include "master_metric_manager.h"
+#include "types.h"
 
 namespace mooncake {
 
@@ -20,6 +22,11 @@ AllocatedBuffer::~AllocatedBuffer() {
         VLOG(1) << "allocator=expired_or_null in buf_handle_destructor";
     }
 }
+
+CachelibBufferAllocator::CachelibBufferAllocator(std::string segment_name, size_t base,
+                                                 size_t size)
+    : CachelibBufferAllocator(std::move(segment_name), base, size,
+                              StorageLevel::RAM) {}
 
 // Removed allocated_bytes parameter and member initialization
 CachelibBufferAllocator::CachelibBufferAllocator(std::string segment_name, size_t base,
@@ -123,6 +130,11 @@ void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
 }
 
 // OffsetBufferAllocator implementation
+OffsetBufferAllocator::OffsetBufferAllocator(std::string segment_name,
+                                             size_t base, size_t size)
+    : OffsetBufferAllocator(std::move(segment_name), base, size,
+                            StorageLevel::RAM) {}
+
 OffsetBufferAllocator::OffsetBufferAllocator(std::string segment_name,
                                              size_t base, size_t size,
                                              StorageLevel level)
