@@ -117,6 +117,9 @@ class CxlTransport : public Transport {
     void* cxl_base_addr;
     size_t cxl_dev_size;
     char* cxl_dev_path;
+#ifdef USE_CXL_CUDA
+    std::vector<std::pair<void*, size_t>> cuda_registered_chunks_;
+#endif
 };
 }  // namespace mooncake
 

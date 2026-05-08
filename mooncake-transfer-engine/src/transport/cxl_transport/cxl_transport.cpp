@@ -103,7 +103,14 @@ CxlTransport::CxlTransport() {
 
 CxlTransport::~CxlTransport() {
 #ifdef USE_CXL_CUDA
-    CUDA_CHECK(cudaHostUnregister(cxl_base_addr));
+    for (auto& chunk : cuda_registered_chunks_) {
+        cudaError_t e = cudaHostUnregister(chunk.first);
+        if (e != cudaSuccess) {
+            LOG(WARNING) << "CxlTransport: cudaHostUnregister failed at "
+                         << chunk.first << ": " << cudaGetErrorString(e);
+        }
+    }
+    cuda_registered_chunks_.clear();
 #endif
     munmap(cxl_base_addr, cxl_dev_size);
     metadata_->removeSegmentDesc(local_server_name_);
@@ -263,24 +270,42 @@ int CxlTransport::cxlDevInit()
     }
 
     void* ptr = mmap(NULL, cxl_dev_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    // LOG(INFO) << "CxlTransport: use normal mmap.";
     LOG(INFO) << "CxlTransport: use mmap, size:" << cxl_dev_size/1024/1024/1024 << "GB";
     if (ptr == MAP_FAILED) {
         close(fd);
         return ERR_MEMORY;
     }
-    // DSA copy requires that memory has already undergone page faults
+
+#ifdef USE_CXL_DSA
+    // DSA submission does not fault pages itself; pre-fault the whole region.
     memset((char*)ptr, 0, cxl_dev_size);
-    // LOG(INFO) << "Memset dsa base addrs";
+#endif
+
     cxl_base_addr = ptr;
     close(fd);
 
 #ifdef USE_CXL_CUDA
-    cudaError_t reg_err = cudaHostRegister(cxl_base_addr, cxl_dev_size, cudaHostRegisterDefault);
-    if (reg_err != cudaSuccess) {
-        LOG(ERROR) << "CxlTransport: Cannot register CXL memory to CUDA." << strerror(errno);
-        return -1;
+    // cudaHostRegister has a per-call size cap (< 512 GiB on the target
+    // hardware), so split the region into 256 GiB chunks. Tracking chunks in
+    // cuda_registered_chunks_ also lets the destructor unregister exactly the
+    // ranges that succeeded.
+    constexpr size_t kRegChunk = 256ULL << 30;
+    size_t off = 0;
+    while (off < cxl_dev_size) {
+        size_t this_size = std::min(kRegChunk, cxl_dev_size - off);
+        void* this_addr = static_cast<char*>(cxl_base_addr) + off;
+        cudaError_t e = cudaHostRegister(this_addr, this_size, cudaHostRegisterDefault);
+        if (e != cudaSuccess) {
+            LOG(ERROR) << "CxlTransport: cudaHostRegister failed at offset "
+                       << off << " size " << this_size << ": "
+                       << cudaGetErrorString(e);
+            return -1;
+        }
+        cuda_registered_chunks_.emplace_back(this_addr, this_size);
+        off += this_size;
     }
+    LOG(INFO) << "CxlTransport: cudaHostRegister done in "
+              << cuda_registered_chunks_.size() << " chunks";
 #endif
 
     return 0;
