@@ -58,7 +58,8 @@ class CachelibBufferAllocator
     : public BufferAllocatorBase,
       public std::enable_shared_from_this<CachelibBufferAllocator> {
    public:
-    CachelibBufferAllocator(std::string segment_name, size_t base, size_t size);
+    CachelibBufferAllocator(std::string segment_name, size_t base, size_t size,
+                            StorageLevel level = StorageLevel::RAM);
 
     ~CachelibBufferAllocator() override;
 
@@ -75,6 +76,7 @@ class CachelibBufferAllocator
     const std::string segment_name_;
     const size_t base_;
     const size_t total_size_;
+    const StorageLevel level_;
     std::atomic_size_t cur_size_;
 
     // metrics - removed allocated_bytes_ member
@@ -94,7 +96,8 @@ class OffsetBufferAllocator
     : public BufferAllocatorBase,
       public std::enable_shared_from_this<OffsetBufferAllocator> {
    public:
-    OffsetBufferAllocator(std::string segment_name, size_t base, size_t size);
+    OffsetBufferAllocator(std::string segment_name, size_t base, size_t size,
+                          StorageLevel level = StorageLevel::RAM);
 
     ~OffsetBufferAllocator() override;
 
@@ -111,6 +114,7 @@ class OffsetBufferAllocator
     const std::string segment_name_;
     const size_t base_;
     const size_t total_size_;
+    const StorageLevel level_;
     std::atomic_size_t cur_size_;
 
     // offset allocator implementation

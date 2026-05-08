@@ -312,14 +312,10 @@ auto MasterService::GetReplicaList(std::string_view key)
         return tl::make_unexpected(ErrorCode::REPLICA_IS_NOT_READY);
     }
 
-    StorageLevel level = StorageLevel::NUM_STORAGE_LEVELS;
     std::vector<Replica::Descriptor> replica_list;
     replica_list.reserve(metadata.replicas.size());
     for (const auto& replica : metadata.replicas) {
         replica_list.emplace_back(replica.get_descriptor());
-        if (level == StorageLevel::NUM_STORAGE_LEVELS) {
-            level = replica.get_descriptor().get_storage_level();
-        }
     }
 
     // Only mark for GC if enabled
@@ -330,12 +326,6 @@ auto MasterService::GetReplicaList(std::string_view key)
         // Grant a lease to the object so it will not be removed
         // when the client is reading it.
         metadata.GrantLease(default_kv_lease_ttl_, default_kv_soft_pin_ttl_);
-    }
-
-    if (level == StorageLevel::RAM) {
-        MasterMetricManager::instance().inc_ram_key_count(1);
-    } else if (level == StorageLevel::CXL) {
-        MasterMetricManager::instance().inc_cxl_key_count(1);
     }
 
     return replica_list;
@@ -551,12 +541,9 @@ auto MasterService::Remove(const std::string& key)
         return tl::make_unexpected(ErrorCode::REPLICA_IS_NOT_READY);
     }
 
-    StorageLevel storage_level = metadata.get_storage_level();
-    if (storage_level == StorageLevel::RAM) {
-        MasterMetricManager::instance().dec_allocated_dram_size(metadata.size);
-    } else if (storage_level == StorageLevel::CXL) {
-        MasterMetricManager::instance().dec_allocated_cxl_size(metadata.size);
-    }
+    // DRAM/CXL bucket accounting is handled by allocator->deallocate(),
+    // triggered by AllocatedBuffer destructors when accessor.Erase() destroys
+    // the metadata. Don't decrement here, or we'd double-count.
 
     // Remove object metadata
     accessor.Erase();
@@ -790,24 +777,27 @@ auto MasterService::MigrateEnd(const std::string& key,
 
     bool target_replica_found = false;
     uint64_t total_ram_size = 0;
+    StorageLevel old_level = StorageLevel::NUM_STORAGE_LEVELS;
     auto& metadata = accessor.Get();
     for (auto& replica : metadata.replicas) {
         if (replica.get_descriptor().storage_level == config.preferred_storage_level) {
             replica.mark_complete();
             target_replica_found = true;
-
-            if (replica.get_descriptor().storage_level == StorageLevel::CXL) {
-                MasterMetricManager::instance().inc_allocated_cxl_size(replica.get_size());
-            }
         } else {
+            if (old_level == StorageLevel::NUM_STORAGE_LEVELS) {
+                old_level = replica.get_descriptor().storage_level;
+            }
             if (replica.get_descriptor().storage_level == StorageLevel::RAM) {
                 total_ram_size += replica.get_size();
-                MasterMetricManager::instance().dec_allocated_dram_size(replica.get_size());
             }
         }
     }
 
     MasterMetricManager::instance().dec_degraded_queue_size(total_ram_size);
+
+    // Allocator deallocate (triggered when old replicas are erased below)
+    // handles both Storage and DRAM/CXL bucket accounting; don't touch the
+    // gauges here.
 
     // remove old replicas
     if (target_replica_found) {
@@ -820,6 +810,22 @@ auto MasterService::MigrateEnd(const std::string& key,
                 }
             ), metadata.replicas.end()
         );
+
+        // Storage-level key count migrates with the surviving replica.
+        // ObjectMetadata's ctor inc'd `old_level`; dtor will dec the new
+        // (preferred) level. Patch the bucket here so inc/dec stay balanced.
+        if (old_level != config.preferred_storage_level) {
+            if (old_level == StorageLevel::RAM) {
+                MasterMetricManager::instance().dec_ram_key_count(1);
+            } else if (old_level == StorageLevel::CXL) {
+                MasterMetricManager::instance().dec_cxl_key_count(1);
+            }
+            if (config.preferred_storage_level == StorageLevel::RAM) {
+                MasterMetricManager::instance().inc_ram_key_count(1);
+            } else if (config.preferred_storage_level == StorageLevel::CXL) {
+                MasterMetricManager::instance().inc_cxl_key_count(1);
+            }
+        }
     }
     
     // for now, just keep it 

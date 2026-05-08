@@ -357,12 +357,12 @@ void SegmentManager::initializeCxlAllocator() {
     size_t cxl_size = DEFAULT_CXL_SIZE;
     if (memory_allocator_ == BufferAllocatorType::CACHELIB) {
         cxl_global_allocator_ = std::make_shared<CachelibBufferAllocator>(
-            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size
+            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size, StorageLevel::CXL
         );
         LOG(INFO) << "CachelibBufferAllocator initialized.";
     } else if (memory_allocator_ == BufferAllocatorType::OFFSET) {
         cxl_global_allocator_ = std::make_shared<OffsetBufferAllocator>(
-            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size
+            DEFAULT_CXL_PATH, DEFAULT_CXL_BASE, cxl_size, StorageLevel::CXL
         );
         LOG(INFO) << "OffsetBufferAllocator initialized.";
     }

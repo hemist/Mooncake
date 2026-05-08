@@ -67,6 +67,15 @@ class MasterService {
             if (soft_pin_timeout) {
                 MasterMetricManager::instance().dec_soft_pin_key_count(1);
             }
+            if (!replicas.empty()) {
+                StorageLevel level =
+                    replicas.front().get_storage_level();
+                if (level == StorageLevel::RAM) {
+                    MasterMetricManager::instance().dec_ram_key_count(1);
+                } else if (level == StorageLevel::CXL) {
+                    MasterMetricManager::instance().dec_cxl_key_count(1);
+                }
+            }
         }
 
         ObjectMetadata() = delete;
@@ -82,6 +91,15 @@ class MasterService {
             if (enable_soft_pin) {
                 soft_pin_timeout.emplace();
                 MasterMetricManager::instance().inc_soft_pin_key_count(1);
+            }
+            if (!replicas.empty()) {
+                StorageLevel level =
+                    replicas.front().get_storage_level();
+                if (level == StorageLevel::RAM) {
+                    MasterMetricManager::instance().inc_ram_key_count(1);
+                } else if (level == StorageLevel::CXL) {
+                    MasterMetricManager::instance().inc_cxl_key_count(1);
+                }
             }
             MasterMetricManager::instance().observe_value_size(value_length);
         }

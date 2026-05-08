@@ -23,10 +23,12 @@ AllocatedBuffer::~AllocatedBuffer() {
 
 // Removed allocated_bytes parameter and member initialization
 CachelibBufferAllocator::CachelibBufferAllocator(std::string segment_name, size_t base,
-                                 size_t size)
+                                 size_t size,
+                                 StorageLevel level)
     : segment_name_(segment_name),
       base_(base),
       total_size_(size),
+      level_(level),
       cur_size_(0) {
     VLOG(1) << "initializing_buffer_allocator segment_name=" << segment_name
             << " base_address=" << reinterpret_cast<void*>(base)
@@ -85,7 +87,11 @@ std::unique_ptr<AllocatedBuffer> CachelibBufferAllocator::allocate(size_t size) 
             << " segment=" << segment_name_ << " address=" << buffer;
     cur_size_.fetch_add(size);
     MasterMetricManager::instance().inc_allocated_size(size);
-    MasterMetricManager::instance().inc_allocated_dram_size(size);
+    if (level_ == StorageLevel::CXL) {
+        MasterMetricManager::instance().inc_allocated_cxl_size(size);
+    } else {
+        MasterMetricManager::instance().inc_allocated_dram_size(size);
+    }
     return std::make_unique<AllocatedBuffer>(shared_from_this(), segment_name_,
                                              buffer, size);
 }
@@ -118,10 +124,12 @@ void CachelibBufferAllocator::deallocate(AllocatedBuffer* handle) {
 
 // OffsetBufferAllocator implementation
 OffsetBufferAllocator::OffsetBufferAllocator(std::string segment_name,
-                                             size_t base, size_t size)
+                                             size_t base, size_t size,
+                                             StorageLevel level)
     : segment_name_(segment_name),
       base_(base),
       total_size_(size),
+      level_(level),
       cur_size_(0) {
     VLOG(1) << "initializing_offset_buffer_allocator segment_name="
             << segment_name << " base_address=" << reinterpret_cast<void*>(base)
@@ -187,6 +195,11 @@ std::unique_ptr<AllocatedBuffer> OffsetBufferAllocator::allocate(size_t size) {
 
     cur_size_.fetch_add(size);
     MasterMetricManager::instance().inc_allocated_size(size);
+    if (level_ == StorageLevel::CXL) {
+        MasterMetricManager::instance().inc_allocated_cxl_size(size);
+    } else {
+        MasterMetricManager::instance().inc_allocated_dram_size(size);
+    }
     return allocated_buffer;
 }
 
@@ -194,11 +207,18 @@ void OffsetBufferAllocator::deallocate(AllocatedBuffer* handle) {
     try {
         // The OffsetAllocator handles deallocation automatically through RAII
         // when the OffsetAllocationHandle goes out of scope
+        bool is_cxl =
+            handle->get_descriptor().level_ == StorageLevel::CXL;
         size_t freed_size = handle->size();
         handle->offset_handle_.reset();
         handle->status = BufStatus::UNREGISTERED;
         cur_size_.fetch_sub(freed_size);
         MasterMetricManager::instance().dec_allocated_size(freed_size);
+        if (is_cxl) {
+            MasterMetricManager::instance().dec_allocated_cxl_size(freed_size);
+        } else {
+            MasterMetricManager::instance().dec_allocated_dram_size(freed_size);
+        }
         VLOG(1) << "deallocation_succeeded address=" << handle->data()
                 << " size=" << freed_size << " segment=" << segment_name_;
     } catch (const std::exception& e) {

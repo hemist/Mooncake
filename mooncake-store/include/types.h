@@ -365,9 +365,13 @@ class AllocatedBuffer {
         level = StorageLevel::CXL;
         segment_name_ = client_segment_name;
         if (!direct_cxl_alloc) {
+            // Migration path: buffer originally came from a RAM allocator, so
+            // allocator already inc'd DRAM bucket. Move accounting to CXL.
             MasterMetricManager::instance().dec_allocated_dram_size(size_);
+            MasterMetricManager::instance().inc_allocated_cxl_size(size_);
         }
-        MasterMetricManager::instance().inc_allocated_cxl_size(size_);
+        // Direct CXL alloc path: CXL allocator already inc'd CXL bucket in
+        // allocate(); nothing to adjust here.
         return true;
     }
 
