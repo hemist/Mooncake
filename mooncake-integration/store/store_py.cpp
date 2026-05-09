@@ -167,7 +167,12 @@ static bool isPortAvailable(int port) {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    bool available = (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    // Require both bind() and listen() to succeed: with SO_REUSEADDR a bind()
+    // can succeed even when another process already holds the port bound,
+    // and the race only surfaces at listen() time. Probing listen() here
+    // rejects ports another process has already claimed for listening.
+    bool available = (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+                     && (listen(sock, 1) == 0);
     close(sock);
     return available;
 }

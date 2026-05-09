@@ -1119,6 +1119,17 @@ uint16_t findAvailableTcpPort(int &sockfd) {
             }
         }
 
+        // Atomically claim the port by entering LISTEN state. Without this,
+        // SO_REUSEADDR allows multiple concurrent binds to the same port and
+        // the race only resolves later in startDaemon's listen(), causing
+        // EADDRINUSE there. listen() on an already-listening fd later in
+        // startDaemon is idempotent (just adjusts the backlog).
+        if (listen(sockfd, globalConfig().handshake_listen_backlog) < 0) {
+            close(sockfd);
+            sockfd = -1;
+            continue;
+        }
+
         return port;
     }
     return 0;
