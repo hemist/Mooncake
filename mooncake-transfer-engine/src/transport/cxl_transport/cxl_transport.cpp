@@ -276,10 +276,11 @@ int CxlTransport::cxlDevInit()
         return ERR_MEMORY;
     }
 
-#ifdef USE_CXL_DSA
-    // DSA submission does not fault pages itself; pre-fault the whole region.
+    // Pre-fault the whole region. DSA needs this because submission does not
+    // fault pages itself; CUDA and default-memcpy paths also benefit because
+    // first-touch faults during the hot path showed up as user-visible
+    // stalls in practice.
     memset((char*)ptr, 0, cxl_dev_size);
-#endif
 
     cxl_base_addr = ptr;
     close(fd);
