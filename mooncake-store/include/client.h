@@ -240,8 +240,7 @@ class Client {
      * @brief CXL channel rpc client creating and binding
      * @return tl::expected<bool, ErrorCode> true on success
      */
-    tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient(
-        const std::string& master_server_addr);
+    tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient();
 
     /**
      * @brief Reset (unbind and clear) the CXL Channel RPC client.

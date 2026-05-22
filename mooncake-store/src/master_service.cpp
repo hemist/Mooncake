@@ -2,8 +2,10 @@
 
 #include <cassert>
 #include <cstdint>
+#include <iomanip>
 #include <queue>
 #include <shared_mutex>
+#include <sstream>
 #include <ylt/util/tl/expected.hpp>
 
 #include "master_metric_manager.h"
@@ -259,26 +261,47 @@ auto MasterService::ExistKey(const std::string& key)
     return true;
 }
 
-#define STORE_USE_CXL_CHANNEL
 #ifdef STORE_USE_CXL_CHANNEL
 // CXL channel message deal function
 bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response) {
     try {
+        // Set the response op to match the request op
+        response.op = request.op;
+        
         // Deal with the CXL channel message based on the operation type
         switch (request.op) {
             case CxlChannelRpcOp::PutStart: {
-                LOG(INFO) << "Processing PutStart request for key: " << request.key;
-                // TODO: Implement PutStart logic
+                // LOG(INFO) << "Processing PutStart request for key: " << request.key;
+                auto put_start_result = PutStart(request.key, request.slice_lengths, request.config);
+                if (put_start_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    response.replica_list = put_start_result.value();
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_start_result.error());
+                }
                 break;
             }
             case CxlChannelRpcOp::PutEnd: {
-                LOG(INFO) << "Processing PutEnd request for key: " << request.key;
-                // TODO: Implement PutEnd logic
+                // LOG(INFO) << "Processing PutEnd request for key: " << request.key;
+                auto put_end_result = PutEnd(request.key);
+                if (put_end_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_end_result.error());
+                }
                 break;
             }
             case CxlChannelRpcOp::PutRevoke: {
-                LOG(INFO) << "Processing PutRevoke request for key: " << request.key;
-                // TODO: Implement PutRevoke logic
+                // LOG(INFO) << "Processing PutRevoke request for key: " << request.key;
+                auto put_revoke_result = PutRevoke(request.key);
+                if (put_revoke_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_revoke_result.error());
+                }
                 break;
             }
             case CxlChannelRpcOp::ExistKey: {
@@ -308,9 +331,121 @@ bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlCh
             }
             case CxlChannelRpcOp::Heartbeat: {
                 // 心跳包处理：只需要返回成功状态
-                VLOG(1) << "Processing Heartbeat request";
                 response.status = CxlChannelRpcStatus::Success;
                 response.error_code = 0;
+                break;
+            }
+            case CxlChannelRpcOp::BatchExistKey: {
+                // VLOG(1) << "Processing BatchExistKey request for keys count: " << request.keys.size();
+                auto batch_exist_result = BatchExistKey(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_exist_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    // 提取所有结果
+                    response.exists.reserve(batch_exist_result.size());
+                    for (const auto& result : batch_exist_result) {
+                        response.exists.push_back(static_cast<int8_t>(result.value() ? 1 : 0));
+                    }
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                    response.exists.clear();
+                }
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutStart: {
+                // VLOG(1) << "Processing BatchPutStart request for keys count: " << request.keys.size();
+
+                // 使用请求中的 batch_slice_lengths，每个 key 对应独立的 slice_lengths
+                auto batch_put_start_result = BatchPutStart(request.keys, request.batch_slice_lengths, request.config);
+
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+
+                for (const auto& result : batch_put_start_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    // 提取所有结果
+                    response.batch_replica_lists.reserve(batch_put_start_result.size());
+                    for (const auto& result : batch_put_start_result) {
+                        response.batch_replica_lists.push_back(result.value());
+                    }
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                    response.batch_replica_lists.clear();
+                }
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutEnd: {
+                // VLOG(1) << "Processing BatchPutEnd request for keys count: " << request.keys.size();
+                
+                auto batch_put_end_result = BatchPutEnd(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_put_end_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                }
+                
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutRevoke: {
+                // VLOG(1) << "Processing BatchPutRevoke request for keys count: " << request.keys.size();
+                
+                auto batch_put_revoke_result = BatchPutRevoke(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_put_revoke_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                }
                 break;
             }
             default:
@@ -334,19 +469,23 @@ auto MasterService::cxlChannelHandshake()
 
     // Create channel
     std::string cxl_client_name = "master_service_" + cxl_channel_name;
+    auto cxl_config = GetCxlChannelConfig();
     auto channel_opt = cxl_shm::Channel::Create(
         cxl_channel_name,
         cxl_client_name,  // client_name
-        "/dev/dax0.0",     // dev_dax_path
-        1024ULL * 1024ULL * 1024ULL, // dev_dax_size
-        "127.0.0.1:50052", // master_server_addr ??? wcg 待完善
+        cxl_config.dev_dax_path,
+        cxl_config.dev_dax_size,
+        cxl_config.cxl_channel_master_addr,
         cxl_shm::ChannelMode::CXL_SHM_REQ,
-        false);
+        false,
+        cxl_config.dev_dax_offset
+    );
     if (!channel_opt.has_value()) {
         LOG(ERROR) << "Failed to create CXL channel: " << cxl_channel_name;
         return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
     }
     auto channel = channel_opt.value();
+    std::cout << "Successfully created CXL channel: " << cxl_channel_name << std::endl;
 
     // Register channel
     auto register_result = channel->Register(1UL, STORE_CXL_CHANNEL_MSG_SIZE);
@@ -354,105 +493,57 @@ auto MasterService::cxlChannelHandshake()
         LOG(ERROR) << "Failed to register CXL channel: " << cxl_channel_name;
         return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
     }
+    std::cout << "Successfully registered CXL channel: " << cxl_channel_name << std::endl;
 
-    // Define message structure
-    struct Message {
-        char data[4096];
-    };
-
-    // Create detached thread for message handling
-    std::thread message_thread([this, channel]() {
-        auto cleanup = [&]() {
-            if (channel) {
-                auto unregister_result = channel->Unregister();
-                if (!unregister_result.has_value()) {
-                    LOG(ERROR) << "Failed to unregister CXL channel";
-                } else {
-                    VLOG(1) << "Successfully unregistered CXL channel";
-                }
+    // Install the RPC handler. The library spawns an internal IO thread that
+    // repeatedly reads requests, invokes the handler, and writes the response
+    // back on the same channel. Each request carries a request_id so the
+    // client-side demux can match responses to callers; this removes the
+    // response-misordering bug the old while(true){Recv;Send} loop had under
+    // multi-threaded client workloads.
+    auto serve_result = channel->ServeWith(
+        [this](const std::string& request_data) -> std::string {
+            CxlChannelRpcResponse response;
+            try {
+                CxlChannelRpcRequest request =
+                    CxlChannelRpcRequest::deserialize(request_data);
+                CxlChannelMsgDeal(request, response);
+            } catch (const std::exception& e) {
+                LOG(WARNING) << "Failed to deserialize CxlChannelRpcRequest: "
+                             << e.what();
+                response.status = CxlChannelRpcStatus::Fail;
+                response.error_code =
+                    static_cast<int>(ErrorCode::INTERNAL_ERROR);
             }
-        };
+            std::string out = response.serialize();
+            return out;
+        });
+    if (!serve_result.has_value()) {
+        LOG(ERROR) << "Failed to switch CXL channel to RPC server mode: "
+                   << cxl_channel_name;
+        (void)channel->Unregister();
+        return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
+    }
 
-        try {
-            char data[STORE_CXL_CHANNEL_MSG_SIZE];
-            #if 0
-            while (true) {
-                auto recv_result = channel->Recv(data, 128);
-                // std::cout << "====recv_result: " << (recv_result.has_value() ? "success" : "failure") << std::endl;
-                auto send_result = channel->Send(data, 128);
-                // std::cout << "====send_result: " << (send_result.has_value() ? "success" : "failure") << std::endl;
-
-                // CxlChannelRpcResponse response;
-                // try {
-                //     std::string request_data(data, 45);
-                //     CxlChannelRpcRequest request = CxlChannelRpcRequest::deserialize(request_data);
-                //     LOG(INFO) << "Deserialized CxlChannelRpcRequest - op: " 
-                //               << static_cast<int>(request.op) 
-                //               << ", key: " << request.key;
-                //     CxlChannelMsgDeal(request, response);
-                // } catch (const std::exception& e) {
-                //     LOG(WARNING) << "Failed to deserialize CxlChannelRpcRequest: " << e.what();
-                // }
-
-                // std::string response_data = response.serialize();
-                // // Send back
-                // LOG(INFO) << "Sending message2: " << response_data.size() << "[" << response_data << "]";
-                // auto send_result = channel->Send(response_data.data(), response_data.size());
-                // if (!send_result.has_value()) {
-                //     LOG(ERROR) << "Failed to send message";
-                //     break;
-                // }
-            }
-            #endif
-
-            while (true) {
-                // LOG(INFO) << "Waiting for message...";
-                auto recv_result = channel->Recv(data, STORE_CXL_CHANNEL_MSG_SIZE);
-                if (!recv_result.has_value()) {
-                    LOG(ERROR) << "Failed to receive message";
-                    break;
-                }
-                // LOG(INFO) << "recved message";
-
-                CxlChannelRpcResponse response;
-                try {
-                    std::string request_data(data, recv_result.value());
-                    CxlChannelRpcRequest request = CxlChannelRpcRequest::deserialize(request_data);
-                    CxlChannelMsgDeal(request, response);
-                } catch (const std::exception& e) {
-                    LOG(WARNING) << "Failed to deserialize CxlChannelRpcRequest: " << e.what();
-                }
-
-                // Send back
-                std::string response_data = response.serialize();
-                auto send_result = channel->Send(response_data.data(), response_data.size());
-                if (!send_result.has_value()) {
-                    LOG(ERROR) << "Failed to send message";
-                    break;
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG(ERROR) << "CXL message thread exception: " << e.what();
-        } catch (...) {
-            LOG(ERROR) << "CXL message thread unknown exception";
-        }
-
-        cleanup();
-    });
-    message_thread.detach();
+    // Keep the channel alive for the rest of MasterService's lifetime;
+    // dropping the shared_ptr would tear down the library's IO thread.
+    {
+        std::lock_guard<std::mutex> lk(cxl_channels_mutex_);
+        cxl_channels_.emplace_back(channel);
+    }
 
     return cxl_channel_name;
 }
-#else
-bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response) {
-    VLOG(1) << "CxlChannelMsgDeal: cxl_shm channel integration is disabled";
-    return false;
-}
-auto MasterService::cxlChannelHandshake()
-    -> tl::expected<std::string, ErrorCode> {
-    VLOG(1) << "cxlChannelHandshake: cxl_shm channel integration is disabled";
-    return tl::make_unexpected(ErrorCode::UNSUPPORTED);
-}
+// #else
+// bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response) {
+//     VLOG(1) << "CxlChannelMsgDeal: cxl_shm channel integration is disabled";
+//     return false;
+// }
+// auto MasterService::cxlChannelHandshake()
+//     -> tl::expected<std::string, ErrorCode> {
+//     VLOG(1) << "cxlChannelHandshake: cxl_shm channel integration is disabled";
+//     return tl::make_unexpected(ErrorCode::UNSUPPORTED);
+// }
 #endif
 
 std::vector<tl::expected<bool, ErrorCode>> MasterService::BatchExistKey(
@@ -712,13 +803,29 @@ auto MasterService::PutRevoke(const std::string& key)
     return {};
 }
 
+std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
+MasterService::BatchPutStart(const std::vector<std::string>& keys,
+                              const std::vector<std::vector<uint64_t>>& slice_lengths,
+                              const ReplicateConfig& config) {
+    std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>> results;
+    results.reserve(keys.size());
+
+    for (size_t i = 0; i < keys.size(); ++i) {
+        results.emplace_back(PutStart(keys[i], slice_lengths[i], config));
+    }
+
+    return results;
+}
+
 std::vector<tl::expected<void, ErrorCode>> MasterService::BatchPutEnd(
     const std::vector<std::string>& keys) {
     std::vector<tl::expected<void, ErrorCode>> results;
     results.reserve(keys.size());
+    
     for (const auto& key : keys) {
         results.emplace_back(PutEnd(key));
     }
+    
     return results;
 }
 
@@ -726,9 +833,11 @@ std::vector<tl::expected<void, ErrorCode>> MasterService::BatchPutRevoke(
     const std::vector<std::string>& keys) {
     std::vector<tl::expected<void, ErrorCode>> results;
     results.reserve(keys.size());
+    
     for (const auto& key : keys) {
         results.emplace_back(PutRevoke(key));
     }
+    
     return results;
 }
 

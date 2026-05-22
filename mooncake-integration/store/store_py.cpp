@@ -289,7 +289,7 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
         }
     }
 
-    client_->CreateCxlChannelRpcClient("127.0.0.1:50052");
+    client_->CreateCxlChannelRpcClient();
 
     return {};
 }
@@ -1220,37 +1220,37 @@ int DistributedObjectStore::batch_put_from_warp(
     const std::vector<void *> &buffers,
     size_t size, 
     const ReplicateConfig &config) {
-    printf("print [PUT-start] batch_put_from_warp start-1\n");
-    LOG(INFO) << "[PUT-start] batch_put_from_warp start";
+    // printf("print [PUT-start] batch_put_from_warp start-1\n");
+    // LOG(INFO) << "[PUT-start] batch_put_from_warp start";
     if (!client_) {
         LOG(ERROR) << "Client is not initialized";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
 
-    printf("print [PUT-start] batch_put_from_warp start-2\n");
+    // printf("print [PUT-start] batch_put_from_warp start-2\n");
 
     if (buffers.size() % keys.size() != 0) {
         LOG(ERROR) << "Invalid buffer size in a warp";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
 
-    printf("print [PUT-start] batch_put_from_warp start-3\n");
+    // printf("print [PUT-start] batch_put_from_warp start-3\n");
 
     std::vector<Slice> slices;
     for (size_t i = 0; i < buffers.size(); i++) {
         slices.emplace_back(Slice{buffers[i], size});
     }
 
-    printf("print [PUT-start] batch_put_from_warp start-4\n");
+    // printf("print [PUT-start] batch_put_from_warp start-4\n");
 
     auto put_result = client_->BatchPutWarp(keys, slices, config);
-    printf("print [PUT-end] batch_put_from_warp end-1\n");
-    LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
-    if (keys.size() > 1) {
-        LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
-    } else {
-        LOG(INFO) << "key: " << keys[0];
-    }
+    // printf("print [PUT-end] batch_put_from_warp end-1\n");
+    // LOG(INFO) << "[PUT-end] BatchPutWarp, keys.size = " << keys.size() << ", buffers.size = " << buffers.size() << ", size = " << size;
+    // if (keys.size() > 1) {
+    //     LOG(INFO) << "keys:[" << keys[0] << ",..., " << keys[keys.size()-1] << "]";
+    // } else {
+    //     LOG(INFO) << "key: " << keys[0];
+    // }
     return to_py_ret(put_result);
 }
 

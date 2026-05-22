@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -315,6 +316,18 @@ class MasterService {
     auto PutRevoke(const std::string& key) -> tl::expected<void, ErrorCode>;
 
     /**
+     * @brief Start a batch of put operations for multiple objects
+     * @param keys Vector of object keys
+     * @param slice_lengths Vector of slice lengths for each key (each key can have different slice configuration)
+     * @param config Replication configuration
+     * @return Vector of results, each containing replica descriptors or error code
+     */
+    std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
+    BatchPutStart(const std::vector<std::string>& keys,
+                  const std::vector<std::vector<uint64_t>>& slice_lengths,
+                  const ReplicateConfig& config);
+
+    /**
      * @brief Complete a batch of put operations
      * @return ErrorCode::OK on success, ErrorCode::OBJECT_NOT_FOUND if not
      * found, ErrorCode::INVALID_WRITE if replica status is invalid
@@ -402,8 +415,9 @@ class MasterService {
     }
 
    private:
-    // CXL channel message deal function
+    #ifdef STORE_USE_CXL_CHANNEL
     bool CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response);
+    #endif
 
     // GC thread function
     void GCThreadFunc();
@@ -532,6 +546,15 @@ class MasterService {
 
     // cxl storage controller
     const bool enable_cxl_; 
+
+#ifdef STORE_USE_CXL_CHANNEL
+    // Keep every per-client CXL RPC channel alive for the whole lifetime of
+    // MasterService. After ServeWith() the library owns an internal IO thread
+    // that references the channel; dropping our shared_ptr here would tear it
+    // down.
+    std::mutex cxl_channels_mutex_;
+    std::vector<std::shared_ptr<cxl_shm::Channel>> cxl_channels_;
+#endif
 
     std::shared_ptr<MasterMQService> master_mq_service_;
 };

@@ -1,10 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 #include <ylt/coro_rpc/coro_rpc_client.hpp>
 
 #include "rpc_service.h"
@@ -46,8 +48,7 @@ class MasterClient {
      * @param master_server_addr The master server address
      * @return tl::expected<bool, ErrorCode>
      */
-    [[nodiscard]] tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient(
-        const std::string& master_server_addr);
+    [[nodiscard]] tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient();
 
     /**
      * @brief Reset (unbind and clear) the CXL Channel RPC client.
@@ -316,10 +317,14 @@ class MasterClient {
         std::string channel_name_;
     };
     CxlChannelRpcClientAccessor cxl_channel_accessor_;
-    
+
     // 心跳线程相关
+    // heartbeat_mtx_/heartbeat_cv_ 用于让 Reset 时能立即唤醒 sleep 中的心跳线程，
+    // 避免使用 std::this_thread::sleep_for 这种不可打断的等待，使 join() 保持 μs 级返回。
     std::thread heartbeat_thread_;
     std::atomic<bool> heartbeat_running_{false};
+    std::mutex heartbeat_mtx_;
+    std::condition_variable heartbeat_cv_;
     #endif
 
     // Mutex to insure the Connect function is atomic.

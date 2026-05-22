@@ -191,11 +191,15 @@ tl::expected<bool, ErrorCode> WrappedMasterService::ExistKey(
 }
 
 tl::expected<std::string, ErrorCode> WrappedMasterService::cxlChannelHandshake() {
+    #ifdef STORE_USE_CXL_CHANNEL
     return execute_rpc(
         "cxlChannelHandshake", [&] { return master_service_.cxlChannelHandshake(); },
         [&](auto& timer) { timer.LogRequest("action=handshake"); },
         [] { /* no specific metric */ },
         [] { /* no specific failure metric */ });
+    #else
+    return tl::make_unexpected(ErrorCode::UNSUPPORTED);
+    #endif
 }
 
 std::vector<tl::expected<bool, ErrorCode>> WrappedMasterService::BatchExistKey(
@@ -307,28 +311,20 @@ WrappedMasterService::BatchPutStart(
     timer.LogRequest("keys_count=", keys.size());
     MasterMetricManager::instance().inc_batch_put_start_requests();
 
-    std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
-        results;
-    results.reserve(keys.size());
-
-    for (size_t i = 0; i < keys.size(); ++i) {
-        results.emplace_back(
-            master_service_.PutStart(keys[i], slice_lengths[i], config));
-    }
+    auto result = master_service_.BatchPutStart(keys, slice_lengths, config);
 
     size_t failure_count = 0;
-    for (size_t i = 0; i < results.size(); ++i) {
-        if (!results[i].has_value()) {
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (!result[i].has_value()) {
             failure_count++;
-            // LOG(ERROR) << "BatchPutStart failed for key[" << i << "] '" << keys[i] << "': " << toString(results[i].error());
         }
     }
     MasterMetricManager::instance().inc_batch_put_start_failures(failure_count);
 
-    timer.LogResponse("total=", results.size(),
-                      ", success=", results.size() - failure_count,
+    timer.LogResponse("total=", result.size(),
+                      ", success=", result.size() - failure_count,
                       ", failures=", failure_count);
-    return results;
+    return result;
 }
 
 std::vector<tl::expected<void, ErrorCode>> WrappedMasterService::BatchPutEnd(
@@ -337,27 +333,22 @@ std::vector<tl::expected<void, ErrorCode>> WrappedMasterService::BatchPutEnd(
     timer.LogRequest("keys_count=", keys.size());
     MasterMetricManager::instance().inc_batch_put_end_requests();
 
-    std::vector<tl::expected<void, ErrorCode>> results;
-    results.reserve(keys.size());
-
-    for (const auto& key : keys) {
-        results.emplace_back(master_service_.PutEnd(key));
-    }
+    auto result = master_service_.BatchPutEnd(keys);
 
     size_t failure_count = 0;
-    for (size_t i = 0; i < results.size(); ++i) {
-        if (!results[i].has_value()) {
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (!result[i].has_value()) {
             failure_count++;
             LOG(ERROR) << "BatchPutEnd failed for key[" << i << "] '" << keys[i]
-                       << "': " << toString(results[i].error());
+                       << "': " << toString(result[i].error());
         }
     }
     MasterMetricManager::instance().inc_batch_put_end_failures(failure_count);
 
-    timer.LogResponse("total=", results.size(),
-                      ", success=", results.size() - failure_count,
+    timer.LogResponse("total=", result.size(),
+                      ", success=", result.size() - failure_count,
                       ", failures=", failure_count);
-    return results;
+    return result;
 }
 
 std::vector<tl::expected<void, ErrorCode>> WrappedMasterService::BatchPutRevoke(
@@ -366,28 +357,22 @@ std::vector<tl::expected<void, ErrorCode>> WrappedMasterService::BatchPutRevoke(
     timer.LogRequest("keys_count=", keys.size());
     MasterMetricManager::instance().inc_batch_put_revoke_requests();
 
-    std::vector<tl::expected<void, ErrorCode>> results;
-    results.reserve(keys.size());
-
-    for (const auto& key : keys) {
-        results.emplace_back(master_service_.PutRevoke(key));
-    }
+    auto result = master_service_.BatchPutRevoke(keys);
 
     size_t failure_count = 0;
-    for (size_t i = 0; i < results.size(); ++i) {
-        if (!results[i].has_value()) {
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (!result[i].has_value()) {
             failure_count++;
-            LOG(ERROR) << "BatchPutRevoke failed for key[" << i << "] '"
-                       << keys[i] << "': " << toString(results[i].error());
+            LOG(ERROR) << "BatchPutRevoke failed for key[" << i << "] '" << keys[i]
+                       << "': " << toString(result[i].error());
         }
     }
-    MasterMetricManager::instance().inc_batch_put_revoke_failures(
-        failure_count);
+    MasterMetricManager::instance().inc_batch_put_revoke_failures(failure_count);
 
-    timer.LogResponse("total=", results.size(),
-                      ", success=", results.size() - failure_count,
+    timer.LogResponse("total=", result.size(),
+                      ", success=", result.size() - failure_count,
                       ", failures=", failure_count);
-    return results;
+    return result;
 }
 
 tl::expected<void, ErrorCode> WrappedMasterService::Remove(
