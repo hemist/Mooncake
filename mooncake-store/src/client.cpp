@@ -914,10 +914,11 @@ void Client::SubmitPutTransfers(std::vector<std::unique_ptr<PutOperation>>& ops,
                        << ": " << failure_context;
             op->SetError(ErrorCode::TRANSFER_FAIL, failure_context);
             op->pending_transfers.clear();
-        } else {
-            LOG(INFO) << "Successfully submitted " << op->pending_transfers.size()
-                      << " transfers for key " << op->key;
-        }
+        } 
+        // else {
+        //     LOG(INFO) << "Successfully submitted " << op->pending_transfers.size()
+        //               << " transfers for key " << op->key;
+        // }
     }
 }
 
@@ -1468,6 +1469,17 @@ tl::expected<bool, ErrorCode> Client::IsExist(const std::string& key) {
         return tl::unexpected(result.error());
     }
     return result.value();
+}
+
+tl::expected<std::string, ErrorCode> Client::cxlChannelHandshake() {
+    return master_client_.cxlChannelHandshake();
+}
+tl::expected<bool, ErrorCode> Client::CreateCxlChannelRpcClient() {
+    return master_client_.CreateCxlChannelRpcClient();
+}
+
+tl::expected<bool, ErrorCode> Client::ResetCxlChannelRpcClient() {
+    return master_client_.ResetCxlChannelRpcClient();
 }
 
 std::vector<tl::expected<bool, ErrorCode>> Client::BatchIsExist(

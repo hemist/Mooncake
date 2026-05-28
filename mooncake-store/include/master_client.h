@@ -1,12 +1,20 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
 #include <ylt/coro_rpc/coro_rpc_client.hpp>
 
 #include "rpc_service.h"
 #include "types.h"
+
+#if defined(STORE_USE_CXL_CHANNEL)
+#include "cxl_shm/message_queue.h"
+#endif
 
 using namespace async_simple;
 using namespace coro_rpc;
@@ -34,6 +42,20 @@ class MasterClient {
     [[nodiscard]] ErrorCode Connect(
         const std::string& master_addr = kDefaultMasterAddress);
 
+        /**
+     * @brief Create and bind a CXL Channel RPC client.
+     * @param channel_name The channel name to use (from handshake)
+     * @param master_server_addr The master server address
+     * @return tl::expected<bool, ErrorCode>
+     */
+    [[nodiscard]] tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient();
+
+    /**
+     * @brief Reset (unbind and clear) the CXL Channel RPC client.
+     * @return tl::expected<bool, ErrorCode>
+     */
+    [[nodiscard]] tl::expected<bool, ErrorCode> ResetCxlChannelRpcClient();
+
     /**
      * @brief Checks if an object exists
      * @param object_key Key to query
@@ -41,6 +63,12 @@ class MasterClient {
      */
     [[nodiscard]] tl::expected<bool, ErrorCode> ExistKey(
         const std::string& object_key);
+
+    /**
+     * @brief CXL channel handshake, get a UUID string
+     * @return tl::expected<std::string, ErrorCode> UUID string on success
+     */
+    [[nodiscard]] tl::expected<std::string, ErrorCode> cxlChannelHandshake();
 
     /**
      * @brief Checks if multiple objects exist
@@ -254,6 +282,50 @@ class MasterClient {
         std::shared_ptr<coro_rpc_client> client_;
     };
     RpcClientAccessor client_accessor_;
+
+    #if defined(STORE_USE_CXL_CHANNEL)
+    /**
+     * @brief Send heartbeat message through CXL channel
+     * @param channel The CXL channel to send heartbeat
+     */
+    void sendHeartbeat(std::shared_ptr<cxl_shm::Channel> channel);
+    
+    /**
+     * @brief Accessor for the cxl_shm::Channel. Thread-safe.
+     */
+    class CxlChannelRpcClientAccessor {
+       public:
+        void SetChannel(std::shared_ptr<cxl_shm::Channel> channel, const std::string& channel_name) {
+            std::lock_guard<std::shared_mutex> lock(channel_mutex_);
+            channel_ = channel;
+            channel_name_ = channel_name;
+        }
+
+        std::shared_ptr<cxl_shm::Channel> GetChannel() {
+            std::shared_lock<std::shared_mutex> lock(channel_mutex_);
+            return channel_;
+        }
+
+        std::string GetChannelName() {
+            std::shared_lock<std::shared_mutex> lock(channel_mutex_);
+            return channel_name_;
+        }
+
+       private:
+        mutable std::shared_mutex channel_mutex_;
+        std::shared_ptr<cxl_shm::Channel> channel_;
+        std::string channel_name_;
+    };
+    CxlChannelRpcClientAccessor cxl_channel_accessor_;
+
+    // 心跳线程相关
+    // heartbeat_mtx_/heartbeat_cv_ 用于让 Reset 时能立即唤醒 sleep 中的心跳线程，
+    // 避免使用 std::this_thread::sleep_for 这种不可打断的等待，使 join() 保持 μs 级返回。
+    std::thread heartbeat_thread_;
+    std::atomic<bool> heartbeat_running_{false};
+    std::mutex heartbeat_mtx_;
+    std::condition_variable heartbeat_cv_;
+    #endif
 
     // Mutex to insure the Connect function is atomic.
     mutable Mutex connect_mutex_;

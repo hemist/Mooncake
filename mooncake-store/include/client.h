@@ -235,6 +235,24 @@ class Client {
     tl::expected<bool, ErrorCode> IsExist(const std::string& key);
 
     /**
+     * @brief CXL channel handshake, get a UUID string
+     * @return tl::expected<std::string, ErrorCode> UUID string on success
+     */
+    tl::expected<std::string, ErrorCode> cxlChannelHandshake();
+
+    /**
+     * @brief CXL channel rpc client creating and binding
+     * @return tl::expected<bool, ErrorCode> true on success
+     */
+    tl::expected<bool, ErrorCode> CreateCxlChannelRpcClient();
+
+    /**
+     * @brief Reset (unbind and clear) the CXL Channel RPC client.
+     * @return tl::expected<bool, ErrorCode>
+     */
+    tl::expected<bool, ErrorCode> ResetCxlChannelRpcClient();
+
+    /**
      * @brief Checks if multiple objects exist
      * @param keys Vector of keys to check
      * @param exist_results Output vector of existence results for each key

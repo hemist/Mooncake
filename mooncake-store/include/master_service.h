@@ -2,10 +2,14 @@
 
 #include <atomic>
 #include <boost/functional/hash.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <boost/lockfree/queue.hpp>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -22,6 +26,11 @@
 #include "segment.h"
 #include "types.h"
 #include "master_mq_service.h"
+
+#if defined(STORE_USE_CXL_CHANNEL)
+#include "cxl_shm/message_queue.h"
+#include "cxl_rpc_protocol.h"
+#endif
 
 namespace mooncake {
 // Forward declarations
@@ -156,6 +165,9 @@ class MasterService {
         void SetEvicted() {
             this->can_be_evicted = false;
         }
+        void ResetEvictState() {
+            this->can_be_evicted = true;
+        }
 
         // Check if the lease has expired
         bool IsLeaseExpired() const {
@@ -238,6 +250,12 @@ class MasterService {
      */
     auto ExistKey(const std::string& key) -> tl::expected<bool, ErrorCode>;
 
+    /**
+     * @brief CXL channel handshake, generate and return a UUID string
+     * @return UUID string on success, error otherwise
+     */
+    auto cxlChannelHandshake() -> tl::expected<std::string, ErrorCode>;
+
     std::vector<tl::expected<bool, ErrorCode>> BatchExistKey(
         const std::vector<std::string>& keys);
 
@@ -314,6 +332,18 @@ class MasterService {
      * found, ErrorCode::INVALID_WRITE if replica status is invalid
      */
     auto PutRevoke(const std::string& key) -> tl::expected<void, ErrorCode>;
+
+    /**
+     * @brief Start a batch of put operations for multiple objects
+     * @param keys Vector of object keys
+     * @param slice_lengths Vector of slice lengths for each key (each key can have different slice configuration)
+     * @param config Replication configuration
+     * @return Vector of results, each containing replica descriptors or error code
+     */
+    std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
+    BatchPutStart(const std::vector<std::string>& keys,
+                  const std::vector<std::vector<uint64_t>>& slice_lengths,
+                  const ReplicateConfig& config);
 
     /**
      * @brief Complete a batch of put operations
@@ -403,6 +433,10 @@ class MasterService {
     }
 
    private:
+    #ifdef STORE_USE_CXL_CHANNEL
+    bool CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response);
+    #endif
+
     // GC thread function
     void GCThreadFunc();
 
@@ -414,7 +448,7 @@ class MasterService {
     // evict ratio target. If the actual evicted ratio is less than
     // evict_ratio_lowerbound, the second pass will be triggered and try to
     // fulfill evict ratio lowerbound.
-    void BatchEvict(double evict_ratio_target, double evict_ratio_lowerbound);
+    void BatchEvict(double evict_ratio_target, double evict_ratio_lowerbound, StorageLevel target_storage_level);
 
     // Clear invalid handles in all shards
     void ClearInvalidHandles();
@@ -530,6 +564,15 @@ class MasterService {
 
     // cxl storage controller
     const bool enable_cxl_; 
+
+#ifdef STORE_USE_CXL_CHANNEL
+    // Keep every per-client CXL RPC channel alive for the whole lifetime of
+    // MasterService. After ServeWith() the library owns an internal IO thread
+    // that references the channel; dropping our shared_ptr here would tear it
+    // down.
+    std::mutex cxl_channels_mutex_;
+    std::vector<std::shared_ptr<cxl_shm::Channel>> cxl_channels_;
+#endif
 
     std::shared_ptr<MasterMQService> master_mq_service_;
 };

@@ -2,14 +2,21 @@
 
 #include <cassert>
 #include <cstdint>
+#include <iomanip>
 #include <queue>
 #include <shared_mutex>
+#include <sstream>
 #include <ylt/util/tl/expected.hpp>
 
 #include "master_metric_manager.h"
 #include "segment.h"
 #include "types.h"
 
+#if defined(STORE_USE_CXL_CHANNEL)
+#include "cxl_shm/message_queue.h"
+#include "cxl_rpc_protocol.h"
+#endif
+#include <iostream>
 namespace mooncake {
 
 MasterService::MasterService(bool enable_gc, uint64_t default_kv_lease_ttl,
@@ -254,6 +261,291 @@ auto MasterService::ExistKey(const std::string& key)
     return true;
 }
 
+#ifdef STORE_USE_CXL_CHANNEL
+// CXL channel message deal function
+bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response) {
+    try {
+        // Set the response op to match the request op
+        response.op = request.op;
+        
+        // Deal with the CXL channel message based on the operation type
+        switch (request.op) {
+            case CxlChannelRpcOp::PutStart: {
+                // LOG(INFO) << "Processing PutStart request for key: " << request.key;
+                auto put_start_result = PutStart(request.key, request.slice_lengths, request.config);
+                if (put_start_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    response.replica_list = put_start_result.value();
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_start_result.error());
+                }
+                break;
+            }
+            case CxlChannelRpcOp::PutEnd: {
+                // LOG(INFO) << "Processing PutEnd request for key: " << request.key;
+                auto put_end_result = PutEnd(request.key);
+                if (put_end_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_end_result.error());
+                }
+                break;
+            }
+            case CxlChannelRpcOp::PutRevoke: {
+                // LOG(INFO) << "Processing PutRevoke request for key: " << request.key;
+                auto put_revoke_result = PutRevoke(request.key);
+                if (put_revoke_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(put_revoke_result.error());
+                }
+                break;
+            }
+            case CxlChannelRpcOp::ExistKey: {
+                // LOG(INFO) << "Processing ExistKey request for key: " << request.key;
+                auto exist_result = ExistKey(request.key);
+                if (exist_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    response.exist = exist_result.value();
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(exist_result.error());
+                    response.exist = false;
+                }
+                break;
+            }
+            case CxlChannelRpcOp::GetReplicaList: {
+                // LOG(INFO) << "Processing GetReplicaList request for key: " << request.key;
+                auto replica_list_result = GetReplicaList(request.key);
+                if (replica_list_result.has_value()) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    response.replica_list = replica_list_result.value();
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(replica_list_result.error());
+                }
+                break;
+            }
+            case CxlChannelRpcOp::Heartbeat: {
+                // 心跳包处理：只需要返回成功状态
+                response.status = CxlChannelRpcStatus::Success;
+                response.error_code = 0;
+                break;
+            }
+            case CxlChannelRpcOp::BatchExistKey: {
+                // VLOG(1) << "Processing BatchExistKey request for keys count: " << request.keys.size();
+                auto batch_exist_result = BatchExistKey(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_exist_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    // 提取所有结果
+                    response.exists.reserve(batch_exist_result.size());
+                    for (const auto& result : batch_exist_result) {
+                        response.exists.push_back(static_cast<int8_t>(result.value() ? 1 : 0));
+                    }
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                    response.exists.clear();
+                }
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutStart: {
+                // VLOG(1) << "Processing BatchPutStart request for keys count: " << request.keys.size();
+
+                // 使用请求中的 batch_slice_lengths，每个 key 对应独立的 slice_lengths
+                auto batch_put_start_result = BatchPutStart(request.keys, request.batch_slice_lengths, request.config);
+
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+
+                for (const auto& result : batch_put_start_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                    // 提取所有结果
+                    response.batch_replica_lists.reserve(batch_put_start_result.size());
+                    for (const auto& result : batch_put_start_result) {
+                        response.batch_replica_lists.push_back(result.value());
+                    }
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                    response.batch_replica_lists.clear();
+                }
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutEnd: {
+                // VLOG(1) << "Processing BatchPutEnd request for keys count: " << request.keys.size();
+                
+                auto batch_put_end_result = BatchPutEnd(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_put_end_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                }
+                
+                break;
+            }
+            case CxlChannelRpcOp::BatchPutRevoke: {
+                // VLOG(1) << "Processing BatchPutRevoke request for keys count: " << request.keys.size();
+                
+                auto batch_put_revoke_result = BatchPutRevoke(request.keys);
+                
+                // 检查是否有错误
+                bool has_error = false;
+                ErrorCode error_code = ErrorCode::OK;
+                
+                for (const auto& result : batch_put_revoke_result) {
+                    if (!result.has_value()) {
+                        has_error = true;
+                        error_code = result.error();
+                        break;
+                    }
+                }
+                
+                if (!has_error) {
+                    response.status = CxlChannelRpcStatus::Success;
+                } else {
+                    response.status = CxlChannelRpcStatus::Fail;
+                    response.error_code = static_cast<int>(error_code);
+                }
+                break;
+            }
+            default:
+                LOG(WARNING) << "Unknown operation type: " << static_cast<int>(request.op);
+                return false;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Exception in CxlChannelMsgDeal: " << e.what();
+        return false;
+    }
+}
+
+auto MasterService::cxlChannelHandshake()
+    -> tl::expected<std::string, ErrorCode> {
+
+    // Generate cxl_channel_name
+    boost::uuids::random_generator gen;
+    boost::uuids::uuid uuid = gen();
+    std::string cxl_channel_name = boost::uuids::to_string(uuid);
+
+    // Create channel
+    std::string cxl_client_name = "master_service_" + cxl_channel_name;
+    auto cxl_config = GetCxlChannelConfig();
+    auto channel_opt = cxl_shm::Channel::Create(
+        cxl_channel_name,
+        cxl_client_name,  // client_name
+        cxl_config.dev_dax_path,
+        cxl_config.dev_dax_size,
+        cxl_config.cxl_channel_master_addr,
+        cxl_shm::ChannelMode::CXL_SHM_REQ,
+        false,
+        cxl_config.dev_dax_offset
+    );
+    if (!channel_opt.has_value()) {
+        LOG(ERROR) << "Failed to create CXL channel: " << cxl_channel_name;
+        return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
+    }
+    auto channel = channel_opt.value();
+    std::cout << "Successfully created CXL channel: " << cxl_channel_name << std::endl;
+
+    // Register channel
+    auto register_result = channel->Register(1UL, STORE_CXL_CHANNEL_MSG_SIZE);
+    if (!register_result.has_value()) {
+        LOG(ERROR) << "Failed to register CXL channel: " << cxl_channel_name;
+        return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
+    }
+    std::cout << "Successfully registered CXL channel: " << cxl_channel_name << std::endl;
+
+    // Install the RPC handler. The library spawns an internal IO thread that
+    // repeatedly reads requests, invokes the handler, and writes the response
+    // back on the same channel. Each request carries a request_id so the
+    // client-side demux can match responses to callers; this removes the
+    // response-misordering bug the old while(true){Recv;Send} loop had under
+    // multi-threaded client workloads.
+    auto serve_result = channel->ServeWith(
+        [this](const std::string& request_data) -> std::string {
+            CxlChannelRpcResponse response;
+            try {
+                CxlChannelRpcRequest request =
+                    CxlChannelRpcRequest::deserialize(request_data);
+                CxlChannelMsgDeal(request, response);
+            } catch (const std::exception& e) {
+                LOG(WARNING) << "Failed to deserialize CxlChannelRpcRequest: "
+                             << e.what();
+                response.status = CxlChannelRpcStatus::Fail;
+                response.error_code =
+                    static_cast<int>(ErrorCode::INTERNAL_ERROR);
+            }
+            std::string out = response.serialize();
+            return out;
+        });
+    if (!serve_result.has_value()) {
+        LOG(ERROR) << "Failed to switch CXL channel to RPC server mode: "
+                   << cxl_channel_name;
+        (void)channel->Unregister();
+        return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
+    }
+
+    // Keep the channel alive for the rest of MasterService's lifetime;
+    // dropping the shared_ptr would tear down the library's IO thread.
+    {
+        std::lock_guard<std::mutex> lk(cxl_channels_mutex_);
+        cxl_channels_.emplace_back(channel);
+    }
+
+    return cxl_channel_name;
+}
+// #else
+// bool MasterService::CxlChannelMsgDeal(const CxlChannelRpcRequest& request, CxlChannelRpcResponse& response) {
+//     VLOG(1) << "CxlChannelMsgDeal: cxl_shm channel integration is disabled";
+//     return false;
+// }
+// auto MasterService::cxlChannelHandshake()
+//     -> tl::expected<std::string, ErrorCode> {
+//     VLOG(1) << "cxlChannelHandshake: cxl_shm channel integration is disabled";
+//     return tl::make_unexpected(ErrorCode::UNSUPPORTED);
+// }
+#endif
+
 std::vector<tl::expected<bool, ErrorCode>> MasterService::BatchExistKey(
     const std::vector<std::string>& keys) {
     std::vector<tl::expected<bool, ErrorCode>> results;
@@ -380,6 +672,7 @@ auto MasterService::PutStart(const std::string& key,
         // recover the object that is already exists
         std::vector<Replica::Descriptor> replica_list;
         for (auto& replica : it->second.replicas) {
+            replica.reset_status();
             replica_list.emplace_back(replica.get_descriptor());
         }
         return replica_list;
@@ -457,7 +750,7 @@ auto MasterService::PutStart(const std::string& key,
     metadata_shards_[shard_idx].metadata.emplace(
         std::piecewise_construct, 
         std::forward_as_tuple(key),
-        std::forward_as_tuple(total_length, std::move(replicas), client_config.with_soft_pin, client_config.preferred_storage_level == StorageLevel::RAM)        
+        std::forward_as_tuple(total_length, std::move(replicas), client_config.with_soft_pin)
     );
     return replica_list;
 }
@@ -500,13 +793,29 @@ auto MasterService::PutRevoke(const std::string& key)
     return {};
 }
 
+std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>>
+MasterService::BatchPutStart(const std::vector<std::string>& keys,
+                              const std::vector<std::vector<uint64_t>>& slice_lengths,
+                              const ReplicateConfig& config) {
+    std::vector<tl::expected<std::vector<Replica::Descriptor>, ErrorCode>> results;
+    results.reserve(keys.size());
+
+    for (size_t i = 0; i < keys.size(); ++i) {
+        results.emplace_back(PutStart(keys[i], slice_lengths[i], config));
+    }
+
+    return results;
+}
+
 std::vector<tl::expected<void, ErrorCode>> MasterService::BatchPutEnd(
     const std::vector<std::string>& keys) {
     std::vector<tl::expected<void, ErrorCode>> results;
     results.reserve(keys.size());
+    
     for (const auto& key : keys) {
         results.emplace_back(PutEnd(key));
     }
+    
     return results;
 }
 
@@ -514,9 +823,11 @@ std::vector<tl::expected<void, ErrorCode>> MasterService::BatchPutRevoke(
     const std::vector<std::string>& keys) {
     std::vector<tl::expected<void, ErrorCode>> results;
     results.reserve(keys.size());
+    
     for (const auto& key : keys) {
         results.emplace_back(PutRevoke(key));
     }
+    
     return results;
 }
 
@@ -834,6 +1145,7 @@ auto MasterService::MigrateEnd(const std::string& key,
     // at beginning. 2. If this object has soft pin enabled, set it to be soft
     // pinned.
     metadata.GrantLease(0, default_kv_soft_pin_ttl_);
+    metadata.ResetEvictState();
     return {};
 }
 
@@ -892,6 +1204,21 @@ void MasterService::GCThreadFunc() {
         }
         std::vector<double> used_ratios =
             MasterMetricManager::instance().get_global_used_ratio();
+
+        // CXL eviction path: 1= cxl ratio, 2= ram remain ratio
+        if (enable_cxl_ && used_ratios[1] > eviction_high_watermark_ratio_) {
+            double evict_ratio_target = std::max(
+                eviction_ratio_,
+                used_ratios[1] - eviction_high_watermark_ratio_ + eviction_ratio_);
+            double evict_ratio_lowerbound =
+                std::max(evict_ratio_target * 0.5,
+                         used_ratios[1] - eviction_high_watermark_ratio_);
+            LOG(WARNING) << "CXL ratio: " << used_ratios[1]
+                         << ", high watermark: " << eviction_high_watermark_ratio_
+                         << ", action=start_cxl_eviction";
+            BatchEvict(evict_ratio_target, evict_ratio_lowerbound, StorageLevel::CXL);
+        }
+
         if (used_ratios[2] > eviction_high_watermark_ratio_) {
             double evict_ratio_target = std::max(
                 eviction_ratio_,
@@ -899,8 +1226,8 @@ void MasterService::GCThreadFunc() {
             double evict_ratio_lowerbound =
                 std::max(evict_ratio_target * 0.5,
                          used_ratios[2] - eviction_high_watermark_ratio_);
-            LOG(WARNING) << "Ratio: " << used_ratios[0] << ", Actual ratio: " << used_ratios[2] << ". Start eviction ";
-            BatchEvict(evict_ratio_target, evict_ratio_lowerbound);
+            LOG(WARNING) << "RAM Ratio: " << used_ratios[0] << ", Actual ratio: " << used_ratios[2] << ". Start eviction ";
+            BatchEvict(evict_ratio_target, evict_ratio_lowerbound, StorageLevel::RAM);
         }
 
         std::this_thread::sleep_for(
@@ -916,7 +1243,13 @@ void MasterService::GCThreadFunc() {
 }
 
 void MasterService::BatchEvict(double evict_ratio_target,
-                               double evict_ratio_lowerbound) {
+                               double evict_ratio_lowerbound,
+                               StorageLevel target_storage_level) {
+    if (target_storage_level != StorageLevel::CXL && target_storage_level != StorageLevel::RAM) {
+        LOG(ERROR) << "target_storage_level=" << target_storage_level
+                   << ", error=invalid_params";
+        return;
+    }
     if (evict_ratio_target < evict_ratio_lowerbound) {
         LOG(ERROR) << "evict_ratio_target=" << evict_ratio_target
                    << ", evict_ratio_lowerbound=" << evict_ratio_lowerbound
@@ -944,7 +1277,12 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         // object_count must be updated at beginning as it will be used later
         // to compute ideal_evict_num
-        object_count += shard.metadata.size();
+        //object_count += shard.metadata.size();
+        for (auto it = shard.metadata.begin(); it != shard.metadata.end(); it++) {
+            if (it->second.get_storage_level() == target_storage_level) {
+                object_count += 1;
+            }
+        }
 
         // To achieve evicted_count / object_count = evict_ratio_target,
         // ideally how many object should be evicted in this shard
@@ -952,6 +1290,9 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
         std::vector<std::chrono::steady_clock::time_point> candidates;  // can be removed
         for (auto it = shard.metadata.begin(); it != shard.metadata.end(); it++) {
+            if (it->second.get_storage_level() != target_storage_level) {
+                continue;
+            }
             if (!it->second.CanBeEvicted()) {
                 continue;
             }
@@ -990,6 +1331,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
             while (it != shard.metadata.end()) {
                 // Skip objects that are not allowed to be evicted in the first pass
                 if (!it->second.CanBeEvicted() ||
+                    it->second.get_storage_level() != target_storage_level ||
                     !it->second.IsLeaseExpired(now) ||
                     it->second.IsSoftPinned(now) ||
                     it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
@@ -999,10 +1341,13 @@ void MasterService::BatchEvict(double evict_ratio_target,
                 if (it->second.lease_timeout <= target_timeout) {
                     // Evict this object
                     total_freed_size += it->second.size * it->second.replicas.size();
-                    // it = shard.metadata.erase(it);
-                    PushMasterMQ(it);
-                    it->second.SetEvicted();
-                    ++it;
+                    if (it->second.get_storage_level() == StorageLevel::CXL) {
+                        it = shard.metadata.erase(it);
+                    } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                        PushMasterMQ(it);
+                        it->second.SetEvicted();
+                        ++it;
+                    }
                     shard_evicted_count++;
                 } else {
                     // second pass candidates
@@ -1047,7 +1392,8 @@ void MasterService::BatchEvict(double evict_ratio_target,
 
                 auto it = shard.metadata.begin();
                 while (it != shard.metadata.end() && target_evict_num > 0) {
-                    if (!it->second.CanBeEvicted()) {
+                    if (!it->second.CanBeEvicted() ||
+                        it->second.get_storage_level() != target_storage_level) {
                         ++it;
                         continue;
                     }
@@ -1056,11 +1402,15 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         !it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         // Evict this object
                         total_freed_size += it->second.size * it->second.replicas.size();
-                        // it = shard.metadata.erase(it);
-                        LOG(ERROR) << "PushMasterMQ(it) 2";
-                        PushMasterMQ(it);
-                        it->second.SetEvicted();
-                        ++it;
+                        if (it->second.get_storage_level() == StorageLevel::CXL) {
+                            LOG(ERROR) << "CXL evict 2:" << it->first;
+                            it = shard.metadata.erase(it);
+                        } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                            LOG(ERROR) << "PushMasterMQ(it) 2";
+                            PushMasterMQ(it);
+                            it->second.SetEvicted();
+                            ++it;
+                        }
                         evicted_count++;
                         target_evict_num--;
                     } else {
@@ -1095,6 +1445,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
                     // Skip objects that are not expired or have incomplete
                     // replicas
                     if (!it->second.CanBeEvicted() ||
+                        it->second.get_storage_level() != target_storage_level ||
                         !it->second.IsLeaseExpired(now) ||
                         it->second.HasDiffRepStatus(ReplicaStatus::COMPLETE)) {
                         ++it;
@@ -1106,11 +1457,15 @@ void MasterService::BatchEvict(double evict_ratio_target,
                         it->second.lease_timeout <= soft_target_timeout) {
                         total_freed_size +=
                             it->second.size * it->second.replicas.size();
-                        // it = shard.metadata.erase(it);
-                        LOG(ERROR) << "PushMasterMQ(it) 3";
-                        PushMasterMQ(it);
-                        it->second.SetEvicted();
-                        ++it;
+                        if (it->second.get_storage_level() == StorageLevel::CXL) {
+                            LOG(ERROR) << "CXL evict 3:" << it->first;
+                            it = shard.metadata.erase(it);
+                        } else if (it->second.get_storage_level() == StorageLevel::RAM) {
+                            LOG(ERROR) << "PushMasterMQ(it) 3";
+                            PushMasterMQ(it);
+                            it->second.SetEvicted();
+                            ++it;
+                        }
                         evicted_count++;
                         target_evict_num--;
                     } else {
@@ -1125,6 +1480,7 @@ void MasterService::BatchEvict(double evict_ratio_target,
                        << ", no_pin_objects.size()=" << no_pin_objects.size()
                        << ", soft_pin_objects.size()="
                        << soft_pin_objects.size()
+                       << ", target_storage_level=" << target_storage_level
                        << ", evicted_count=" << evicted_count
                        << ", object_count=" << object_count
                        << ", evict_ratio_target=" << evict_ratio_target
@@ -1132,20 +1488,26 @@ void MasterService::BatchEvict(double evict_ratio_target,
         }
     }
 
-    MasterMetricManager::instance().inc_degraded_queue_size(total_freed_size);
+    if (target_storage_level == StorageLevel::CXL) {
+        MasterMetricManager::instance().dec_allocated_cxl_size(total_freed_size);
+    } else if (target_storage_level == StorageLevel::RAM) {
+        MasterMetricManager::instance().inc_degraded_queue_size(total_freed_size);
+    }
 
-    // if (evicted_count > 0) {
-    //     MasterMetricManager::instance().inc_eviction_success(evicted_count,
-    //                                                          total_freed_size);
-    // } else {
-    //     if (object_count == 0) {
-    //         // No objects to evict, no need to check again
-    //     }
-    //     MasterMetricManager::instance().inc_eviction_fail();
-    // }
-    VLOG(1) << "action=evict_objects"
-            << ", evicted_count=" << evicted_count
-            << ", total_freed_size=" << total_freed_size;
+    if (evicted_count > 0) {
+        MasterMetricManager::instance().inc_eviction_success(evicted_count,
+                                                             total_freed_size);
+    } else {
+        if (object_count == 0) {
+            // No objects to evict, no need to check again
+        }
+        MasterMetricManager::instance().inc_eviction_fail();
+    }
+    if (evicted_count > 0) {
+        LOG(INFO) << "Evicted " << evicted_count << " objects from "
+                  << (target_storage_level == StorageLevel::CXL ? "CXL" : "RAM")
+                  << " to free up " << total_freed_size << " bytes";
+    }
 }
 
 void MasterService::ClientMonitorFunc() {

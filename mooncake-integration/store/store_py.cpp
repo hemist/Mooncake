@@ -284,7 +284,7 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
             }
         } else if (protocol.first == StorageLevel::CXL) { 
             void *ptr = client_->GetBaseAddr();
-            LOG(INFO) << "Mounting CXL segment: " << DEFAULT_CXL_SIZE << " bytes, " << ptr;
+            LOG(INFO) << "Mounting CXL segment1: " << DEFAULT_CXL_SIZE << " bytes, " << ptr;
             auto mount_result = client_->MountSegment(ptr, DEFAULT_CXL_SIZE, protocol.first);
             if (!mount_result.has_value()) {
                 LOG(ERROR) << "Failed to mount segment: "
@@ -293,6 +293,8 @@ tl::expected<void, ErrorCode> DistributedObjectStore::setup_internal(
             }
         }
     }
+
+    client_->CreateCxlChannelRpcClient();
 
     return {};
 }
@@ -334,7 +336,9 @@ tl::expected<void, ErrorCode> DistributedObjectStore::tearDownAll_internal() {
         LOG(ERROR) << "Client is not initialized";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
+
     // Reset all resources
+    client_->ResetCxlChannelRpcClient();
     client_.reset();
     client_buffer_allocator_.reset();
     segment_ptrs_.clear();
@@ -782,6 +786,7 @@ int DistributedObjectStore::isExist(const std::string &key) {
     }
 }
 
+
 std::vector<int> DistributedObjectStore::batchIsExist(
     const std::vector<std::string> &keys) {
     auto internal_results = batchIsExist_internal(keys);
@@ -1227,10 +1232,14 @@ int DistributedObjectStore::batch_put_from_warp(
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
 
+    // printf("print [PUT-start] batch_put_from_warp start-2\n");
+
     if (buffers.size() % keys.size() != 0) {
         LOG(ERROR) << "Invalid buffer size in a warp";
         return static_cast<int>(ErrorCode::INVALID_PARAMS);
     }
+
+    // printf("print [PUT-start] batch_put_from_warp start-3\n");
 
     std::vector<Slice> slices;
     for (size_t i = 0; i < buffers.size(); i++) {
@@ -2111,7 +2120,9 @@ int DistributedObjectStore::put_tensor(const std::string &key,
 }
 
 PYBIND11_MODULE(store, m) {
-    // Define the ReplicateConfig class
+    FLAGS_logtostderr = 1;
+    FLAGS_minloglevel = 0;
+
     py::class_<ReplicateConfig>(m, "ReplicateConfig")
         .def(py::init<>())
         .def_readwrite("replica_num", &ReplicateConfig::replica_num)

@@ -120,6 +120,7 @@ class CxlTransport : public Transport {
 #ifdef USE_CXL_CUDA
     std::vector<std::pair<void*, size_t>> cuda_registered_chunks_;
 #endif
+    size_t cxl_dev_offset;
 };
 }  // namespace mooncake
 

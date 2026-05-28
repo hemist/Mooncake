@@ -159,6 +159,7 @@ enum class ErrorCode : int32_t {
         -1010,  ///< Request cannot be done in current status.
     UNAVAILABLE_IN_CURRENT_MODE =
         -1011,  ///< Request cannot be done in current mode.
+    UNSUPPORTED = -1012,            ///< Operation is not supported in this mode.
 
     // FILE errors (Range: -1100 to -1199)
     FILE_NOT_FOUND = -1100,       ///< File not found.
@@ -193,6 +194,7 @@ enum class BufStatus {
                  // to this state)
     UNREGISTERED = 3,  // Buffer metadata has been deleted
 };
+// YLT_REFL_ENUM(BufStatus, INIT, COMPLETE, FAILED, UNREGISTERED);
 
 /**
  * @brief Stream operator for BufStatus
@@ -223,6 +225,7 @@ enum class ReplicaStatus {
     REMOVED,        // Replica has been removed
     FAILED,         // Failed state (can be used for reassignment)
 };
+// YLT_REFL_ENUM(ReplicaStatus, UNDEFINED, INITIALIZED, PROCESSING, COMPLETE, REMOVED, FAILED);
 
 /**
  * @brief Stream operator for ReplicaStatus
@@ -249,6 +252,7 @@ enum class StorageLevel : int {
 
     NUM_STORAGE_LEVELS
 };
+// YLT_REFL_ENUM(StorageLevel, RAM, CXL, SSD, NUM_STORAGE_LEVELS);
 
 /**
  * @brief Configuration for replica management
@@ -454,6 +458,10 @@ class Replica {
                            [](const std::unique_ptr<AllocatedBuffer>& buf_ptr) {
                                return !buf_ptr->isAllocatorValid();
                            });
+    }
+
+    void reset_status() {
+        status_ = ReplicaStatus::PROCESSING;
     }
 
     void mark_complete() {
