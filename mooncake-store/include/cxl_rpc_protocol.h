@@ -20,13 +20,13 @@ struct CxlChannelConfig {
 };
 
 inline CxlChannelConfig GetCxlChannelConfig() {
-    const char* env_channel_dev_path = std::getenv("MC_CXL_CHANNEL_DEV_PATH");
+    const char* env_channel_dev_path = std::getenv("CXL_MQ_DAX_PATH");
     const char* env_dev_path = std::getenv("MC_CXL_DEV_PATH");
-    const char* env_channel_dev_size = std::getenv("MC_CXL_CHANNEL_DEV_SIZE");
+    const char* env_channel_dev_size = std::getenv("CXL_MQ_DAX_SIZE");
     const char* env_channel_dev_offset = std::getenv("MC_CXL_CHANNEL_DEV_OFFSET");
     const char* env_dev_size = std::getenv("MC_CXL_DEV_SIZE");
     const char* env_dev_offset = std::getenv("MC_CXL_DEV_OFFSET");
-    const char* env_cxl_channel_master = std::getenv("MOONCAKE_CXL_CHANNEL_MASTER");
+    const char* env_cxl_channel_master = std::getenv("CXL_MQ_MASTER_ADDR");
     const char* env_master = std::getenv("MOONCAKE_MASTER");
 
     std::string dev_dax_path;
@@ -35,7 +35,7 @@ inline CxlChannelConfig GetCxlChannelConfig() {
     } else if (env_dev_path && *env_dev_path) {
         dev_dax_path = env_dev_path;
     } else {
-        LOG(ERROR) << "MC_CXL_CHANNEL_DEV_PATH and MC_CXL_DEV_PATH are not set or empty";
+        LOG(ERROR) << "CXL_MQ_DAX_PATH and MC_CXL_DEV_PATH are not set or empty";
         std::exit(EXIT_FAILURE);
     }
 
@@ -44,7 +44,7 @@ inline CxlChannelConfig GetCxlChannelConfig() {
         char* end = nullptr;
         unsigned long long val = std::strtoull(env_channel_dev_size, &end, 10);
         if (end == env_channel_dev_size || *end != '\0') {
-            LOG(ERROR) << "Invalid MC_CXL_CHANNEL_DEV_SIZE: " << env_channel_dev_size;
+            LOG(ERROR) << "Invalid CXL_MQ_DAX_SIZE: " << env_channel_dev_size;
             std::exit(EXIT_FAILURE);
         }
         dev_dax_size = static_cast<std::size_t>(val);
@@ -87,7 +87,7 @@ inline CxlChannelConfig GetCxlChannelConfig() {
         uint64_t other_begin = other_offset;
         uint64_t other_end = other_offset + other_size;
         if (channel_begin < other_end && other_begin < channel_end) {
-            LOG(ERROR) << "MC_CXL_CHANNEL_DEV_PATH and MC_CXL_DEV_PATH are the same and the reserved ranges overlap"
+            LOG(ERROR) << "CXL_MQ_DAX_PATH and MC_CXL_DEV_PATH are the same and the reserved ranges overlap"
                        << ", channel_offset=" << dev_dax_offset
                        << ", channel_size=" << dev_dax_size
                        << ", default_offset=" << other_offset
@@ -120,7 +120,7 @@ inline CxlChannelConfig GetCxlChannelConfig() {
         }
         cxl_channel_master_addr = host + ":" + std::to_string(port + 1);
     } else {
-        LOG(ERROR) << "MOONCAKE_CXL_CHANNEL_MASTER and MOONCAKE_MASTER are not set or empty";
+        LOG(ERROR) << "CXL_MQ_MASTER_ADDR and MOONCAKE_MASTER are not set or empty";
         std::exit(EXIT_FAILURE);
     }
 
